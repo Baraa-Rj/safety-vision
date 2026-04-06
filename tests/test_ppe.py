@@ -1,4 +1,3 @@
-# test_ppe.py
 from src.camera import CameraStream
 from src.ppe_detector import PPEDetector
 import time

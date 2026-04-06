@@ -3,16 +3,13 @@ from collections import defaultdict
 
 
 class FallDetector:
-    def __init__(self, pose_model_path, window_size=15):
+    def __init__(self, pose_model_path, window_size=15, fall_speed_threshold=15):
         self.model = YOLO(pose_model_path)
         self.history = defaultdict(list)
         self.window_size = window_size
+        self.fall_speed_threshold = fall_speed_threshold
 
     def detect(self, frame):
-        """
-        Run pose estimation and check for falls.
-        Returns list of fall events.
-        """
         results = self.model.track(frame, persist=True, verbose=False)[0]
         falls = []
 
@@ -27,9 +24,8 @@ class FallDetector:
             bbox_h = y2 - y1
             aspect_ratio = bbox_h / bbox_w if bbox_w > 0 else 1.0
 
-            # Keypoint indices 11 (left hip) and 12 (right hip) in COCO format
             kps = results.keypoints.xy[i]
-            left_hip_y  = float(kps[11][1])
+            left_hip_y = float(kps[11][1])
             right_hip_y = float(kps[12][1])
             hip_y = (left_hip_y + right_hip_y) / 2
 
@@ -51,12 +47,6 @@ class FallDetector:
         return falls
 
     def _is_fall(self, person_id):
-        """
-        Check if person's history indicates a fall.
-        Rules:
-          - bbox aspect ratio went from >1 (tall) to <1 (wide)
-          - hip height dropped rapidly
-        """
         history = self.history[person_id]
         if len(history) < self.window_size // 2:
             return False
@@ -64,13 +54,27 @@ class FallDetector:
         mid = len(history) // 2
         early, recent = history[:mid], history[mid:]
 
+        # Rule 1: was standing, now horizontal
         was_tall = any(e["aspect_ratio"] > 1.0 for e in early)
-        is_wide  = recent[-1]["aspect_ratio"] < 1.0
+        is_wide = recent[-1]["aspect_ratio"] < 1.0
 
-        # Hip drop: y increases downward in image coordinates
-        early_hip_y  = sum(e["hip_y"] for e in early) / len(early)
+        # Rule 2: hip dropped significantly
+        early_hip_y = sum(e["hip_y"] for e in early) / len(early)
         recent_hip_y = sum(e["hip_y"] for e in recent) / len(recent)
-        avg_bbox_h   = sum(e["bbox_h"] for e in history) / len(history)
-        hip_dropped  = (recent_hip_y - early_hip_y) > 0.25 * avg_bbox_h
+        avg_bbox_h = sum(e["bbox_h"] for e in history) / len(history)
+        hip_dropped = (recent_hip_y - early_hip_y) > 0.25 * avg_bbox_h
 
-        return was_tall and is_wide and hip_dropped
+        # Rule 3: transition was fast (fall vs bending)
+        last_tall_frame = None
+        for i in range(len(history) - 1, -1, -1):
+            if history[i]["aspect_ratio"] > 1.0:
+                last_tall_frame = i
+                break
+
+        if last_tall_frame is None:
+            return False
+
+        transition_frames = len(history) - 1 - last_tall_frame
+        was_fast = transition_frames <= self.fall_speed_threshold
+
+        return was_tall and is_wide and hip_dropped and was_fast
