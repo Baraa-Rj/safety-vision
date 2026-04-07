@@ -108,6 +108,11 @@ class SafetyPipeline:
             # Display
             if display:
                 annotated = self._draw(frame, events)
+                h, w = annotated.shape[:2]
+                max_w = 960
+                if w > max_w:
+                    scale = max_w / w
+                    annotated = cv2.resize(annotated, (max_w, int(h * scale)))
                 cv2.imshow("Safety Vision", annotated)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
