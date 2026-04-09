@@ -2,19 +2,21 @@ from ultralytics import YOLO
 
 
 class PPEDetector:
-    def __init__(self, model_path, confidence=0.35):
+    def __init__(self, model_path, confidence=0.35, required_ppe=None,
+                 overlap_threshold=0.5):
         self.model = YOLO(model_path)
         self.confidence = confidence
-        self.required_ppe = {"helmet", "vest"}
+        self.required_ppe = required_ppe or {"helmet", "vest"}
+        self.overlap_threshold = overlap_threshold
         self.person_class = "person"
 
     def detect(self, frame):
-        results = self.model(frame, conf=self.confidence, verbose=False, imgsz=480)[0]
+        detections = self.model(frame, conf=self.confidence, verbose=False, imgsz=480)[0]
 
         persons = []
         ppe_items = []
 
-        for box in results.boxes:
+        for box in detections.boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             cls_id = int(box.cls[0])
             cls_name = self.model.names[cls_id]
@@ -35,7 +37,7 @@ class PPEDetector:
         for person in persons:
             detected_ppe = set()
             for ppe in ppe_items:
-                if self._is_inside(ppe["bbox"], person["bbox"]):
+                if self._has_sufficient_overlap(ppe["bbox"], person["bbox"]):
                     detected_ppe.add(ppe["class_name"])
 
             missing_ppe = self.required_ppe - detected_ppe
@@ -49,7 +51,7 @@ class PPEDetector:
 
         return results_list
 
-    def _is_inside(self, inner_box, outer_box):
+    def _has_sufficient_overlap(self, inner_box, outer_box):
         ix1, iy1, ix2, iy2 = inner_box
         ox1, oy1, ox2, oy2 = outer_box
 
@@ -68,4 +70,4 @@ class PPEDetector:
             return False
 
         overlap_ratio = inter_area / inner_area
-        return overlap_ratio >= 0.5
+        return overlap_ratio >= self.overlap_threshold

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pt
+data/
+tests/test_frame.jpg
+.pytest_cache/

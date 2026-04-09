@@ -11,6 +11,8 @@ class WorkerIdentifier:
         Takes a cropped image of a person.
         Returns worker ID (int) or None if no marker found.
         """
+        if person_crop is None or person_crop.size == 0:
+            return None
         gray = cv2.cvtColor(person_crop, cv2.COLOR_BGR2GRAY)
         _, ids, _ = self.aruco_detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:

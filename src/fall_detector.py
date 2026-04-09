@@ -3,11 +3,13 @@ from collections import defaultdict
 
 
 class FallDetector:
-    def __init__(self, pose_model_path, window_size=15, fall_speed_threshold=15):
+    def __init__(self, pose_model_path, window_size=15, fall_speed_threshold=15,
+                 hip_drop_ratio=0.25):
         self.model = YOLO(pose_model_path)
         self.history = defaultdict(list)
         self.window_size = window_size
         self.fall_speed_threshold = fall_speed_threshold
+        self.hip_drop_ratio = hip_drop_ratio
 
     def detect(self, frame):
         results = self.model.track(frame, persist=True, verbose=False, imgsz=480)[0]
@@ -62,7 +64,7 @@ class FallDetector:
         early_hip_y = sum(e["hip_y"] for e in early) / len(early)
         recent_hip_y = sum(e["hip_y"] for e in recent) / len(recent)
         avg_bbox_h = sum(e["bbox_h"] for e in history) / len(history)
-        hip_dropped = (recent_hip_y - early_hip_y) > 0.25 * avg_bbox_h
+        hip_dropped = (recent_hip_y - early_hip_y) > self.hip_drop_ratio * avg_bbox_h
 
         # Rule 3: transition was fast (fall vs bending)
         last_tall_frame = None

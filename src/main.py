@@ -1,15 +1,44 @@
+import logging
+from config.settings import PipelineConfig
+from src.camera import CameraStream
+from src.ppe_detector import PPEDetector
+from src.fall_detector import FallDetector
+from src.worker_id import WorkerIdentifier
+from src.zone_monitor import ZoneMonitor
+from src.renderer import FrameRenderer
+from src.event_logger import EventLogger
 from src.pipeline import SafetyPipeline
 
+logging.basicConfig(level=logging.WARNING, format="%(message)s")
+
+config = PipelineConfig()
+
+camera = CameraStream(config.camera.source)
+ppe_detector = PPEDetector(
+    config.ppe.model_path,
+    confidence=config.ppe.confidence,
+    required_ppe=config.ppe.required_ppe,
+    overlap_threshold=config.ppe.overlap_threshold,
+)
+fall_detector = FallDetector(
+    config.fall.model_path,
+    window_size=config.fall.window_size,
+    fall_speed_threshold=config.fall.fall_speed_threshold,
+    hip_drop_ratio=config.fall.hip_drop_ratio,
+)
+worker_id = WorkerIdentifier()
+zone_monitor = ZoneMonitor()
+renderer = FrameRenderer(zone_monitor, config.display)
+event_logger = EventLogger()
 
 pipeline = SafetyPipeline(
-    source="data/sample_videos/output.mp4",
-    ppe_model_path="models/best.pt",
-    pose_model_path="yolo26s-pose.pt",  # downloads automatically first run
+    config=config,
+    camera=camera,
+    ppe_detector=ppe_detector,
+    fall_detector=fall_detector,
+    worker_identifier=worker_id,
+    zone_monitor=zone_monitor,
+    renderer=renderer,
+    event_logger=event_logger,
 )
-
-# Define a restricted zone (adjust coordinates to your factory layout)
-pipeline.add_zone("RESTRICTED_A", [
-    [100, 400], [300, 400], [300, 600], [100, 600]
-])
-
 pipeline.run(display=True)
