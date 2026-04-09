@@ -9,7 +9,7 @@ class PPEDetector:
         self.person_class = "person"
 
     def detect(self, frame):
-        results = self.model(frame, conf=self.confidence, verbose=False)[0]
+        results = self.model(frame, conf=self.confidence, verbose=False, imgsz=480)[0]
 
         persons = []
         ppe_items = []

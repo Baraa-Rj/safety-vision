@@ -1,5 +1,6 @@
 import cv2
 import time
+import threading
 from src.camera import CameraStream
 from src.ppe_detector import PPEDetector
 from src.fall_detector import FallDetector
@@ -15,6 +16,17 @@ class SafetyPipeline:
         self.worker_id = WorkerIdentifier()
         self.zone_monitor = ZoneMonitor()
         self.running = False
+        self._fall_frame_counter = 0
+        self._fall_detection_interval = 2
+        self._cached_falls = []
+        self._latest_events = {
+            "ppe_violations": [],
+            "compliant_workers": [],
+            "falls": [],
+            "zone_breaches": [],
+            "timestamp": 0,
+        }
+        self._events_lock = threading.Lock()
 
     def add_zone(self, zone_id, points):
         self.zone_monitor.add_zone(zone_id, points)
@@ -26,6 +38,7 @@ class SafetyPipeline:
         """
         events = {
             "ppe_violations": [],
+            "compliant_workers": [],
             "falls": [],
             "zone_breaches": [],
             "timestamp": time.time(),
@@ -50,6 +63,11 @@ class SafetyPipeline:
                     "detected": result["detected_ppe"],
                     "zone": zone,
                 })
+            else:
+                events["compliant_workers"].append({
+                    "worker_id": worker_id,
+                    "bbox": result["person_bbox"],
+                })
 
             if zone is not None:
                 events["zone_breaches"].append({
@@ -58,8 +76,14 @@ class SafetyPipeline:
                     "zone_id": zone,
                 })
 
-        # 2. Fall detection
-        falls = self.fall_detector.detect(frame)
+        # 2. Fall detection — run every Nth frame to reduce inference load.
+        # The pose tracker's internal state (ByteTrack) still needs to be fed
+        # frames at N=2 to maintain ID continuity; do not raise interval above 2
+        # without re-validating tracker association on your specific scene.
+        self._fall_frame_counter += 1
+        if self._fall_frame_counter % self._fall_detection_interval == 0:
+            self._cached_falls = self.fall_detector.detect(frame)
+        falls = self._cached_falls
         for fall in falls:
             x1, y1, x2, y2 = fall["bbox"]
             person_crop = frame[y1:y2, x1:x2]
@@ -73,21 +97,18 @@ class SafetyPipeline:
 
         return events
 
-    def run(self, display=True):
-        """
-        Main loop. Reads frames and processes them continuously.
-        """
-        self.running = True
-        time.sleep(1)  # let camera thread start
-
-        print("Pipeline started. Press 'q' to stop.")
-
+    def _detection_loop(self):
+        """Background thread: runs detection on latest frames continuously."""
         while self.running:
             frame = self.camera.read()
             if frame is None:
+                time.sleep(0.005)
                 continue
 
             events = self.process_frame(frame)
+
+            with self._events_lock:
+                self._latest_events = events
 
             # Log events
             if events["ppe_violations"]:
@@ -105,7 +126,26 @@ class SafetyPipeline:
                     wid = z["worker_id"] or "UNIDENTIFIED"
                     print(f"[ZONE BREACH] Worker {wid} in zone {z['zone_id']}")
 
-            # Display
+    def run(self, display=True):
+        """
+        Main loop. Display runs at camera FPS, detection runs in background.
+        """
+        self.running = True
+        time.sleep(1)  # let camera thread start
+
+        self._det_thread = threading.Thread(target=self._detection_loop, daemon=True)
+        self._det_thread.start()
+
+        print("Pipeline started. Press 'q' to stop.")
+
+        while self.running:
+            frame = self.camera.read()
+            if frame is None:
+                continue
+
+            with self._events_lock:
+                events = self._latest_events
+
             if display:
                 annotated = self._draw(frame, events)
                 h, w = annotated.shape[:2]
@@ -125,6 +165,13 @@ class SafetyPipeline:
         Green = compliant, Red = violation/fall/breach.
         """
         display = frame.copy()
+
+        for c in events["compliant_workers"]:
+            x1, y1, x2, y2 = c["bbox"]
+            cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            wid = c["worker_id"] or "?"
+            cv2.putText(display, f"W:{wid} OK", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         for v in events["ppe_violations"]:
             x1, y1, x2, y2 = v["bbox"]

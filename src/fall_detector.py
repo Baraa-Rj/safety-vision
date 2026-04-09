@@ -10,7 +10,7 @@ class FallDetector:
         self.fall_speed_threshold = fall_speed_threshold
 
     def detect(self, frame):
-        results = self.model.track(frame, persist=True, verbose=False)[0]
+        results = self.model.track(frame, persist=True, verbose=False, imgsz=480)[0]
         falls = []
 
         if results.boxes.id is None:
