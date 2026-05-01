@@ -1,6 +1,29 @@
 __pycache__/
 *.pyc
+*.pyo
+
+# Models (too large for git)
 *.pt
+*.onnx
+*.engine
+models/
+
+# Data (videos, images, crops)
 data/
+
+# Test artifacts
 tests/test_frame.jpg
 .pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+venv/
+.venv/

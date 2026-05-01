@@ -21,13 +21,21 @@ class StubPPEDetector:
 
 
 class StubFallDetector:
-    def detect(self, frame):
+    def detect(self, person_bboxes, frame):
         return []
 
 
 class StubWorkerIdentifier:
     def identify(self, crop):
         return None
+
+
+class StubAlertClient:
+    def send_ppe_alert(self, violation, frame):
+        pass
+
+    def shutdown(self):
+        pass
 
 
 @pytest.fixture
@@ -43,6 +51,7 @@ def pipeline():
         zone_monitor=zone_monitor,
         renderer=FrameRenderer(zone_monitor, config.display),
         event_logger=EventLogger(),
+        alert_client=StubAlertClient(),
     )
 
 
@@ -61,6 +70,7 @@ def test_process_frame_with_ppe_violation(dummy_frame):
         def detect(self, frame):
             return [{
                 "person_bbox": [10, 10, 100, 200],
+                "track_id": 1,
                 "compliant": False,
                 "detected_ppe": ["helmet"],
                 "missing_ppe": ["vest"],
@@ -77,9 +87,56 @@ def test_process_frame_with_ppe_violation(dummy_frame):
         zone_monitor=zone_monitor,
         renderer=FrameRenderer(zone_monitor, config.display),
         event_logger=EventLogger(),
+        alert_client=StubAlertClient(),
     )
 
     events = pipeline.process_frame(dummy_frame)
 
     assert len(events["ppe_violations"]) == 1
     assert events["ppe_violations"][0]["missing"] == ["vest"]
+    assert events["ppe_violations"][0]["worker_id"] is None
+    assert events["ppe_violations"][0]["worker_name"] is None
+    assert events["ppe_violations"][0]["qr_data"] is None
+
+
+def test_process_frame_violation_with_qr(dummy_frame):
+    class PPEWithViolation:
+        def detect(self, frame):
+            return [{
+                "person_bbox": [10, 10, 100, 200],
+                "track_id": 1,
+                "compliant": False,
+                "detected_ppe": ["helmet"],
+                "missing_ppe": ["vest"],
+            }]
+
+    class QRWorkerIdentifier:
+        def identify(self, crop):
+            return {
+                "qr_data": '{"id": "W042", "name": "John Doe"}',
+                "worker_name": "John Doe",
+                "worker_id": "W042",
+            }
+
+    config = PipelineConfig()
+    zone_monitor = ZoneMonitor()
+    pipeline = SafetyPipeline(
+        config=config,
+        camera=StubCamera(),
+        ppe_detector=PPEWithViolation(),
+        fall_detector=StubFallDetector(),
+        worker_identifier=QRWorkerIdentifier(),
+        zone_monitor=zone_monitor,
+        renderer=FrameRenderer(zone_monitor, config.display),
+        event_logger=EventLogger(),
+        alert_client=StubAlertClient(),
+    )
+
+    events = pipeline.process_frame(dummy_frame)
+
+    assert len(events["ppe_violations"]) == 1
+    v = events["ppe_violations"][0]
+    assert v["missing"] == ["vest"]
+    assert v["worker_id"] == "W042"
+    assert v["worker_name"] == "John Doe"
+    assert v["qr_data"] == '{"id": "W042", "name": "John Doe"}'

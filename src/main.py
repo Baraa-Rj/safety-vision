@@ -7,9 +7,10 @@ from src.worker_id import WorkerIdentifier
 from src.zone_monitor import ZoneMonitor
 from src.renderer import FrameRenderer
 from src.event_logger import EventLogger
+from src.alert_client import AlertClient
 from src.pipeline import SafetyPipeline
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 config = PipelineConfig()
 
@@ -21,15 +22,19 @@ ppe_detector = PPEDetector(
     overlap_threshold=config.ppe.overlap_threshold,
 )
 fall_detector = FallDetector(
-    config.fall.model_path,
-    window_size=config.fall.window_size,
-    fall_speed_threshold=config.fall.fall_speed_threshold,
-    hip_drop_ratio=config.fall.hip_drop_ratio,
-)
+    config.fall.classifier_model_path,
+    confidence=config.fall.confidence,
+) if config.fall.enabled else None
 worker_id = WorkerIdentifier()
 zone_monitor = ZoneMonitor()
-renderer = FrameRenderer(zone_monitor, config.display)
+video_fps = camera.stream.get(5) or 25  # CAP_PROP_FPS
+renderer = FrameRenderer(zone_monitor, config.display, fps=video_fps)
 event_logger = EventLogger()
+alert_client = AlertClient(
+    config.alert.endpoint,
+    enabled=config.alert.enabled,
+    cooldown_seconds=config.alert.cooldown_seconds,
+)
 
 pipeline = SafetyPipeline(
     config=config,
@@ -40,5 +45,6 @@ pipeline = SafetyPipeline(
     zone_monitor=zone_monitor,
     renderer=renderer,
     event_logger=event_logger,
+    alert_client=alert_client,
 )
 pipeline.run(display=True)

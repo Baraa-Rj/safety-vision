@@ -11,7 +11,7 @@ class PPEDetector:
         self.person_class = "person"
 
     def detect(self, frame):
-        detections = self.model(frame, conf=self.confidence, verbose=False, imgsz=480)[0]
+        detections = self.model.track(frame, conf=self.confidence, verbose=False, imgsz=480, persist=True)[0]
 
         persons = []
         ppe_items = []
@@ -22,10 +22,13 @@ class PPEDetector:
             cls_name = self.model.names[cls_id]
             conf = float(box.conf[0])
 
+            track_id = int(box.id[0]) if box.id is not None else None
+
             detection = {
                 "bbox": [int(x1), int(y1), int(x2), int(y2)],
                 "confidence": conf,
-                "class_name": cls_name
+                "class_name": cls_name,
+                "track_id": track_id,
             }
 
             if cls_name == self.person_class:
@@ -44,9 +47,10 @@ class PPEDetector:
 
             results_list.append({
                 "person_bbox": person["bbox"],
+                "track_id": person.get("track_id"),
                 "compliant": len(missing_ppe) == 0,
                 "detected_ppe": list(detected_ppe),
-                "missing_ppe": list(missing_ppe)
+                "missing_ppe": list(missing_ppe),
             })
 
         return results_list

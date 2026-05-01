@@ -17,11 +17,9 @@ class PPEConfig:
 
 @dataclass
 class FallDetectionConfig:
-    model_path: str = "models/yolo26s-pose.pt"
-    window_size: int = 15
-    fall_speed_threshold: int = 15
-    hip_drop_ratio: float = 0.25
-    detection_interval: int = 2
+    classifier_model_path: str = "models/fall_classifier/weights/best.pt"
+    confidence: float = 0.7
+    enabled: bool = False
 
 
 @dataclass
@@ -31,8 +29,16 @@ class DisplayConfig:
 
 
 @dataclass
+class AlertConfig:
+    endpoint: str = "http://203.0.113.10:8080/api/ppe-alerts"
+    enabled: bool = True
+    cooldown_seconds: float = 30.0
+
+
+@dataclass
 class PipelineConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     ppe: PPEConfig = field(default_factory=PPEConfig)
     fall: FallDetectionConfig = field(default_factory=FallDetectionConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
+    alert: AlertConfig = field(default_factory=AlertConfig)
