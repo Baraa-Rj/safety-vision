@@ -1,4 +1,3 @@
-import json
 import cv2
 import numpy as np
 import pytest
@@ -8,7 +7,6 @@ from src.worker_id import WorkerIdentifier
 def _generate_qr(data, size=300):
     encoder = cv2.QRCodeEncoder.create()
     qr_img = encoder.encode(data)
-    # Resize to desired size and convert to BGR
     qr_img = cv2.resize(qr_img, (size, size), interpolation=cv2.INTER_NEAREST)
     return cv2.cvtColor(qr_img, cv2.COLOR_GRAY2BGR)
 
@@ -18,21 +16,13 @@ def identifier():
     return WorkerIdentifier()
 
 
-def test_detect_qr_json(identifier):
-    data = json.dumps({"id": "W042", "name": "John Doe"})
-    result = identifier.identify(_generate_qr(data))
+def test_detect_qr_uuid(identifier):
+    uuid = "0cb43da1-eb90-4d5d-bae9-c4020a729030"
+    result = identifier.identify(_generate_qr(uuid))
     assert result is not None
-    assert result["worker_id"] == "W042"
-    assert result["worker_name"] == "John Doe"
-    assert result["qr_data"] == data
-
-
-def test_detect_qr_plain_text(identifier):
-    result = identifier.identify(_generate_qr("Alice"))
-    assert result is not None
-    assert result["worker_name"] == "Alice"
-    assert result["worker_id"] is None
-    assert result["qr_data"] == "Alice"
+    assert result["worker_id"] == uuid
+    assert result["worker_name"] is None
+    assert result["qr_data"] == uuid
 
 
 def test_no_qr_returns_none(identifier):

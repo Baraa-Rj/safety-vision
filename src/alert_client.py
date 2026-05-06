@@ -41,6 +41,63 @@ class AlertClient:
         self._last_alert_time[key] = now
         self._executor.submit(self._post_alert, violation, frame)
 
+    def send_zone_alert(self, zone_event, frame):
+        if not self.enabled:
+            return
+
+        worker_id = zone_event.get("worker_id")
+        track_id = zone_event.get("track_id")
+        zone_id = zone_event.get("zone_id")
+
+        if worker_id is not None:
+            key = f"zone_{zone_id}_{worker_id}"
+        elif track_id is not None:
+            key = f"zone_{zone_id}_track_{track_id}"
+        else:
+            x1, y1, x2, y2 = zone_event["bbox"]
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            key = f"zone_{zone_id}_unknown_{cx // 50}_{cy // 50}"
+
+        now = time.time()
+        last = self._last_alert_time.get(key, 0)
+        if now - last < self.cooldown_seconds:
+            return
+
+        self._last_alert_time[key] = now
+        self._executor.submit(self._post_zone_alert, zone_event, frame)
+
+    def _post_zone_alert(self, zone_event, frame):
+        try:
+            _, buffer = cv2.imencode(".jpg", frame)
+            img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+            worker_id = zone_event.get("worker_id")
+            worker_name = zone_event.get("worker_name")
+            zone_id = zone_event.get("zone_id")
+
+            if worker_name:
+                message = f"Worker {worker_name} entered restricted zone {zone_id}"
+            elif worker_id:
+                message = f"Worker {worker_id} entered restricted zone {zone_id}"
+            else:
+                message = f"Unknown worker entered restricted zone {zone_id}"
+
+            payload = {
+                "imgImage": img_b64,
+                "zoneId": zone_id,
+                "message": message,
+            }
+            if worker_id is not None:
+                payload["userId"] = str(worker_id)
+            if worker_name is not None:
+                payload["workerName"] = worker_name
+
+            response = requests.post(self.endpoint, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("[ZONE ALERT SENT] %s", message)
+        except Exception as e:
+            logger.error("[ZONE ALERT FAILED] %s", e)
+
     def _post_alert(self, violation, frame):
         try:
             _, buffer = cv2.imencode(".jpg", frame)
@@ -48,12 +105,8 @@ class AlertClient:
 
             missing = ", ".join(violation["missing"])
             worker_id = violation.get("worker_id")
-            worker_name = violation.get("worker_name")
-            qr_data = violation.get("qr_data")
 
-            if worker_name:
-                message = f"Worker {worker_name} missing {missing}"
-            elif worker_id is not None:
+            if worker_id is not None:
                 message = f"Worker {worker_id} missing {missing}"
             else:
                 message = f"Unknown worker missing {missing}"
@@ -65,10 +118,6 @@ class AlertClient:
             }
             if worker_id is not None:
                 payload["userId"] = str(worker_id)
-            if qr_data is not None:
-                payload["qrData"] = qr_data
-            if worker_name is not None:
-                payload["workerName"] = worker_name
 
             response = requests.post(self.endpoint, json=payload, timeout=10)
             response.raise_for_status()

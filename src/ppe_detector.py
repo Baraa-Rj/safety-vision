@@ -1,17 +1,24 @@
+import torch
 from ultralytics import YOLO
 
 
 class PPEDetector:
     def __init__(self, model_path, confidence=0.35, required_ppe=None,
                  overlap_threshold=0.5):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.use_half = self.device != "cpu"
         self.model = YOLO(model_path)
+        self.model.to(self.device)
         self.confidence = confidence
         self.required_ppe = required_ppe or {"helmet", "vest"}
         self.overlap_threshold = overlap_threshold
         self.person_class = "person"
 
     def detect(self, frame):
-        detections = self.model.track(frame, conf=self.confidence, verbose=False, imgsz=480, persist=True)[0]
+        detections = self.model.track(
+            frame, conf=self.confidence, verbose=False,
+            imgsz=480, persist=True, half=self.use_half
+        )[0]
 
         persons = []
         ppe_items = []

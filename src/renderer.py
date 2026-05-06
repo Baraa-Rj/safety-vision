@@ -3,10 +3,9 @@ from config.settings import DisplayConfig
 
 
 class FrameRenderer:
-    def __init__(self, zone_monitor, display_config=None, fps=25):
+    def __init__(self, zone_monitor, display_config=None):
         self.zone_monitor = zone_monitor
         self.config = display_config or DisplayConfig()
-        self._wait_ms = max(1, int(1000 / fps))
 
     def draw(self, frame, events):
         display = frame.copy()
@@ -53,4 +52,4 @@ class FrameRenderer:
             scale = max_w / w
             annotated = cv2.resize(annotated, (max_w, int(h * scale)))
         cv2.imshow(self.config.window_name, annotated)
-        return cv2.waitKey(self._wait_ms) & 0xFF == ord('q')
+        return cv2.waitKey(1) & 0xFF == ord('q')

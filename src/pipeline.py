@@ -49,13 +49,13 @@ class SafetyPipeline:
 
         for i, result in enumerate(ppe_results):
             x1, y1, x2, y2 = result["person_bbox"]
+            track_id = result.get("track_id")
             person_crop = frame[y1:y2, x1:x2]
-            qr_result = self.worker_id.identify(person_crop)
+            qr_result = self.worker_id.identify(person_crop, track_id=track_id)
             worker_id = qr_result["worker_id"] if qr_result else None
             worker_name = qr_result["worker_name"] if qr_result else None
             qr_data = qr_result["qr_data"] if qr_result else None
             zone = self.zone_monitor.check_person(result["person_bbox"])
-            track_id = result.get("track_id")
 
             if i in fall_indices:
                 events["falls"].append({
@@ -92,13 +92,16 @@ class SafetyPipeline:
                     "zone_id": zone,
                 })
 
+        active_ids = [r.get("track_id") for r in ppe_results if r.get("track_id") is not None]
+        self.worker_id.clear_stale(active_ids)
+
         return events
 
     def _detection_loop(self):
         while self.running:
             frame = self.camera.read()
             if frame is None:
-                time.sleep(0.005)
+                time.sleep(0.001)
                 continue
 
             events = self.process_frame(frame)
@@ -106,9 +109,22 @@ class SafetyPipeline:
             if self.alert_client:
                 for violation in events["ppe_violations"]:
                     self.alert_client.send_ppe_alert(violation, frame)
+                for zone_event in events["zone_breaches"]:
+                    self.alert_client.send_zone_alert(zone_event, frame)
 
+            # Only update displayed events if we detected people,
+            # otherwise keep showing previous results (avoids flickering
+            # when detection momentarily misses a person).
+            has_detections = (
+                events["ppe_violations"] or
+                events["compliant_workers"] or
+                events["falls"]
+            )
             with self._events_lock:
-                self._latest_events = events
+                if has_detections:
+                    self._latest_events = events
+                elif time.time() - self._latest_events["timestamp"] > 0.5:
+                    self._latest_events = events
 
             self.event_logger.log_events(events)
 
@@ -116,14 +132,19 @@ class SafetyPipeline:
         self.running = True
         time.sleep(self.config.camera.startup_delay)
 
-        threading.Thread(target=self._detection_loop, daemon=True).start()
-
         print("Pipeline started. Press 'q' to stop.")
 
+        fps = self.camera.stream.get(cv2.CAP_PROP_FPS) or 25
+        frame_period = 1.0 / fps
+
+        threading.Thread(target=self._detection_loop, daemon=True).start()
+
         while self.running:
+            loop_start = time.perf_counter()
+
             frame = self.camera.read()
             if frame is None:
-                time.sleep(0.005)
+                time.sleep(0.001)
                 continue
 
             with self._events_lock:
@@ -133,6 +154,11 @@ class SafetyPipeline:
                 quit_requested = self.renderer.render_to_window(frame, events)
                 if quit_requested:
                     break
+
+            elapsed = time.perf_counter() - loop_start
+            remaining = frame_period - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
 
         self.stop()
 

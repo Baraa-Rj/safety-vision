@@ -26,8 +26,11 @@ class StubFallDetector:
 
 
 class StubWorkerIdentifier:
-    def identify(self, crop):
+    def identify(self, crop, track_id=None):
         return None
+
+    def clear_stale(self, active_track_ids):
+        pass
 
 
 class StubAlertClient:
@@ -111,12 +114,15 @@ def test_process_frame_violation_with_qr(dummy_frame):
             }]
 
     class QRWorkerIdentifier:
-        def identify(self, crop):
+        def identify(self, crop, track_id=None):
             return {
                 "qr_data": '{"id": "W042", "name": "John Doe"}',
                 "worker_name": "John Doe",
                 "worker_id": "W042",
             }
+
+        def clear_stale(self, active_track_ids):
+            pass
 
     config = PipelineConfig()
     zone_monitor = ZoneMonitor()

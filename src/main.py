@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from config.settings import PipelineConfig
 from src.camera import CameraStream
 from src.ppe_detector import PPEDetector
@@ -27,8 +29,7 @@ fall_detector = FallDetector(
 ) if config.fall.enabled else None
 worker_id = WorkerIdentifier()
 zone_monitor = ZoneMonitor()
-video_fps = camera.stream.get(5) or 25  # CAP_PROP_FPS
-renderer = FrameRenderer(zone_monitor, config.display, fps=video_fps)
+renderer = FrameRenderer(zone_monitor, config.display)
 event_logger = EventLogger()
 alert_client = AlertClient(
     config.alert.endpoint,
@@ -47,4 +48,16 @@ pipeline = SafetyPipeline(
     event_logger=event_logger,
     alert_client=alert_client,
 )
+
+zones_file = "data/zones.json"
+if os.path.exists(zones_file):
+    with open(zones_file) as f:
+        zones_data = json.load(f)
+    for z in zones_data:
+        pipeline.add_zone(z["zone_id"], z["points"])
+    logging.info("Loaded %d zone(s) from %s", len(zones_data), zones_file)
+else:
+    for zone_def in config.zone.zones:
+        pipeline.add_zone(zone_def.zone_id, zone_def.points)
+
 pipeline.run(display=True)

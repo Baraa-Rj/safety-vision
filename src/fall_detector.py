@@ -1,12 +1,16 @@
 import os
 
+import torch
 from ultralytics import YOLO
 
 
 class FallDetector:
     def __init__(self, classifier_model_path, confidence=0.7):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.use_half = self.device != "cpu"
         if os.path.exists(classifier_model_path):
             self.model = YOLO(classifier_model_path)
+            self.model.to(self.device)
         else:
             self.model = None
         self.confidence = confidence
@@ -32,7 +36,7 @@ class FallDetector:
             if crop.size == 0:
                 continue
 
-            results = self.model(crop, verbose=False, imgsz=128)[0]
+            results = self.model(crop, verbose=False, imgsz=128, half=self.use_half)[0]
             probs = results.probs
 
             class_idx = int(probs.top1)
