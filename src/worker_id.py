@@ -3,7 +3,7 @@ import time
 
 
 class WorkerIdentifier:
-    def __init__(self, cache_ttl=30.0, max_failed_attempts=5):
+    def __init__(self, cache_ttl=30.0, max_failed_attempts=450):
         self.detector = cv2.QRCodeDetector()
         self._cache = {}
         self._fail_count = {}

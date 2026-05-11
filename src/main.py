@@ -23,19 +23,22 @@ ppe_detector = PPEDetector(
     required_ppe=config.ppe.required_ppe,
     overlap_threshold=config.ppe.overlap_threshold,
 )
-fall_detector = FallDetector(
-    config.fall.classifier_model_path,
-    confidence=config.fall.confidence,
-) if config.fall.enabled else None
+fall_detector = None
 worker_id = WorkerIdentifier()
 zone_monitor = ZoneMonitor()
+
+zones_path = os.path.join(os.path.dirname(__file__), "..", "data", "zones.json")
+if os.path.exists(zones_path):
+    with open(zones_path) as f:
+        zones_data = json.load(f)
+    for zone in zones_data:
+        zone_monitor.add_zone(zone["zone_id"], zone["points"])
+    logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
+else:
+    logging.warning(f"No zones file found at {zones_path}")
+
 renderer = FrameRenderer(zone_monitor, config.display)
 event_logger = EventLogger()
-alert_client = AlertClient(
-    config.alert.endpoint,
-    enabled=config.alert.enabled,
-    cooldown_seconds=config.alert.cooldown_seconds,
-)
 
 pipeline = SafetyPipeline(
     config=config,
@@ -46,18 +49,7 @@ pipeline = SafetyPipeline(
     zone_monitor=zone_monitor,
     renderer=renderer,
     event_logger=event_logger,
-    alert_client=alert_client,
+    alert_client=None,
 )
-
-zones_file = "data/zones.json"
-if os.path.exists(zones_file):
-    with open(zones_file) as f:
-        zones_data = json.load(f)
-    for z in zones_data:
-        pipeline.add_zone(z["zone_id"], z["points"])
-    logging.info("Loaded %d zone(s) from %s", len(zones_data), zones_file)
-else:
-    for zone_def in config.zone.zones:
-        pipeline.add_zone(zone_def.zone_id, zone_def.points)
 
 pipeline.run(display=True)

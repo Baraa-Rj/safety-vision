@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 @dataclass
 class CameraConfig:
-    source: str = "data/sample_videos/output.mp4"
+    source: str = "data/sample_videos/full-vest-with-QR.mp4"
     startup_delay: float = 1.0
 
 
