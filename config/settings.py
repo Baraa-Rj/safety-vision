@@ -41,6 +41,7 @@ class AlertConfig:
 class ZoneDefinition:
     zone_id: str = ""
     points: List[List[int]] = field(default_factory=list)
+    allowed_workers: List[str] = field(default_factory=list)
 
 
 @dataclass

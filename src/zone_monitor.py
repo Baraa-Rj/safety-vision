@@ -5,12 +5,20 @@ import numpy as np
 class ZoneMonitor:
     def __init__(self):
         self.zones = {}
+        self.permissions = {}
 
-    def add_zone(self, zone_id, points):
+    def add_zone(self, zone_id, points, allowed_workers=None):
         """
         points: list of [x, y] coordinates defining the polygon
+        allowed_workers: list of worker_id strings permitted in this zone
         """
         self.zones[zone_id] = np.array(points, dtype=np.int32)
+        self.permissions[zone_id] = set(allowed_workers) if allowed_workers else set()
+
+    def is_permitted(self, zone_id, worker_id):
+        if worker_id is None:
+            return False
+        return worker_id in self.permissions.get(zone_id, set())
 
     def check_person(self, person_bbox):
         """

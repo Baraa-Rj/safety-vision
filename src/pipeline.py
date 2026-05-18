@@ -83,7 +83,7 @@ class SafetyPipeline:
                     "bbox": result["person_bbox"],
                 })
 
-            if zone is not None:
+            if zone is not None and not self.zone_monitor.is_permitted(zone, worker_id):
                 events["zone_breaches"].append({
                     "worker_id": worker_id,
                     "worker_name": worker_name,

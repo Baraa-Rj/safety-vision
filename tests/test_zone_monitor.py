@@ -31,6 +31,30 @@ def test_no_zones_defined():
     assert empty_monitor.check_person([150, 100, 250, 250]) is None
 
 
+def test_permitted_worker_allowed():
+    zm = ZoneMonitor()
+    zm.add_zone("zone_a", [[100, 100], [300, 100], [300, 300], [100, 300]], allowed_workers=["W001"])
+    assert zm.is_permitted("zone_a", "W001") is True
+
+
+def test_unpermitted_worker_denied():
+    zm = ZoneMonitor()
+    zm.add_zone("zone_a", [[100, 100], [300, 100], [300, 300], [100, 300]], allowed_workers=["W001"])
+    assert zm.is_permitted("zone_a", "W999") is False
+
+
+def test_unidentified_worker_denied():
+    zm = ZoneMonitor()
+    zm.add_zone("zone_a", [[100, 100], [300, 100], [300, 300], [100, 300]], allowed_workers=["W001"])
+    assert zm.is_permitted("zone_a", None) is False
+
+
+def test_no_allowed_workers_denies_all():
+    zm = ZoneMonitor()
+    zm.add_zone("zone_a", [[100, 100], [300, 100], [300, 300], [100, 300]])
+    assert zm.is_permitted("zone_a", "W001") is False
+
+
 def test_zone_breach_in_pipeline(dummy_frame):
     """Zone breach is detected and included in pipeline events."""
     from config.settings import PipelineConfig
@@ -86,3 +110,56 @@ def test_zone_breach_in_pipeline(dummy_frame):
 
     assert len(events["zone_breaches"]) == 1
     assert events["zone_breaches"][0]["zone_id"] == "danger_zone"
+
+
+def test_permitted_worker_no_zone_breach(dummy_frame):
+    """Permitted worker in a zone does NOT produce a zone breach."""
+    from config.settings import PipelineConfig
+    from src.pipeline import SafetyPipeline
+    from src.renderer import FrameRenderer
+    from src.event_logger import EventLogger
+
+    class PPEWithPerson:
+        def detect(self, frame):
+            return [{
+                "person_bbox": [150, 100, 250, 250],
+                "track_id": 1,
+                "compliant": True,
+                "detected_ppe": ["helmet", "vest"],
+                "missing_ppe": [],
+            }]
+
+    class StubWorkerIdentifier:
+        def identify(self, crop, track_id=None):
+            return {"qr_data": "W042", "worker_id": "W042", "worker_name": None}
+
+        def clear_stale(self, active_track_ids):
+            pass
+
+    class StubCamera:
+        def read(self):
+            return dummy_frame
+
+        def stop(self):
+            pass
+
+    config = PipelineConfig()
+    zone_monitor = ZoneMonitor()
+    zone_monitor.add_zone("danger_zone", [[100, 100], [300, 100], [300, 300], [100, 300]],
+                          allowed_workers=["W042"])
+
+    pipeline = SafetyPipeline(
+        config=config,
+        camera=StubCamera(),
+        ppe_detector=PPEWithPerson(),
+        fall_detector=None,
+        worker_identifier=StubWorkerIdentifier(),
+        zone_monitor=zone_monitor,
+        renderer=FrameRenderer(zone_monitor, config.display),
+        event_logger=EventLogger(),
+        alert_client=None,
+    )
+
+    events = pipeline.process_frame(dummy_frame)
+
+    assert len(events["zone_breaches"]) == 0

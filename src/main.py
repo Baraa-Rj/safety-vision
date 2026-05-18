@@ -32,7 +32,7 @@ if os.path.exists(zones_path):
     with open(zones_path) as f:
         zones_data = json.load(f)
     for zone in zones_data:
-        zone_monitor.add_zone(zone["zone_id"], zone["points"])
+        zone_monitor.add_zone(zone["zone_id"], zone["points"], zone.get("allowed_workers"))
     logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
 else:
     logging.warning(f"No zones file found at {zones_path}")
