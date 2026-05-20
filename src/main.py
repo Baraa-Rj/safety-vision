@@ -1,10 +1,20 @@
+import os
+
+# Force FFmpeg to use TCP for RTSP (UDP silently drops frames on busy networks)
+# and apply a 5s socket timeout so dead connections don't hang the read loop.
+# Must be set BEFORE cv2 is imported — OpenCV reads this env var at module load.
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|stimeout;5000000",
+)
+
 import json
 import logging
-import os
 from config.settings import PipelineConfig
 from src.camera import CameraStream
 from src.ppe_detector import PPEDetector
 from src.fall_detector import FallDetector
+from src.wet_floor_detector import WetFloorDetector
 from src.worker_id import WorkerIdentifier
 from src.zone_monitor import ZoneMonitor
 from src.renderer import FrameRenderer
@@ -16,14 +26,27 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 config = PipelineConfig()
 
-camera = CameraStream(config.camera.source)
+camera = CameraStream(
+    config.camera.source,
+    reconnect_after_seconds=config.camera.reconnect_after_seconds,
+    open_max_attempts=config.camera.open_max_attempts,
+    open_retry_backoff=config.camera.open_retry_backoff,
+)
 ppe_detector = PPEDetector(
     config.ppe.model_path,
     confidence=config.ppe.confidence,
     required_ppe=config.ppe.required_ppe,
     overlap_threshold=config.ppe.overlap_threshold,
+    class_confidences=config.ppe.class_confidences,
 )
 fall_detector = None
+
+# Wet floor detection: enable by setting WetFloorConfig.enabled = True
+# AND providing models/wet_floor.pt. The detector is constructed unconditionally
+# so the path is wired; it returns no detections (and only logs once) until
+# both conditions are met.
+wet_floor_detector = WetFloorDetector(config.wet_floor) if config.wet_floor.enabled else None
+
 worker_id = WorkerIdentifier()
 zone_monitor = ZoneMonitor()
 
@@ -50,6 +73,7 @@ pipeline = SafetyPipeline(
     renderer=renderer,
     event_logger=event_logger,
     alert_client=None,
+    wet_floor_detector=wet_floor_detector,
 )
 
 pipeline.run(display=True)

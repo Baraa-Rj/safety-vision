@@ -41,6 +41,48 @@ class AlertClient:
         self._last_alert_time[key] = now
         self._executor.submit(self._post_alert, violation, frame)
 
+    def send_wet_floor_alert(self, wf_event, frame):
+        if not self.enabled:
+            return
+
+        # Bucket centroid so jittery bboxes share a cooldown key.
+        x1, y1, x2, y2 = wf_event["bbox"]
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        key = f"wet_floor_{cx // 50}_{cy // 50}"
+
+        now = time.time()
+        last = self._last_alert_time.get(key, 0)
+        if now - last < self.cooldown_seconds:
+            return
+
+        self._last_alert_time[key] = now
+        self._executor.submit(self._post_wet_floor_alert, wf_event, frame)
+
+    def _post_wet_floor_alert(self, wf_event, frame):
+        try:
+            _, buffer = cv2.imencode(".jpg", frame)
+            img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+            # zone_id tagging is deferred — ZoneMonitor exposes only
+            # check_person (foot-of-bbox semantics for people). A point-in-zone
+            # helper for arbitrary centroids can be added when needed.
+            payload = {
+                "imgImage": img_b64,
+                "event_type": "wet_floor",
+                "bbox": wf_event["bbox"],
+                "confidence": wf_event["confidence"],
+                "areaPct": wf_event["area_pct"],
+                "consecutiveCount": wf_event.get("consecutive_count"),
+                "firstSeenTs": wf_event.get("first_seen_ts"),
+                "message": "Wet floor detected",
+            }
+
+            response = requests.post(self.endpoint, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("[WET FLOOR ALERT SENT] bbox=%s", wf_event["bbox"])
+        except Exception as e:
+            logger.error("[WET FLOOR ALERT FAILED] %s", e)
+
     def send_zone_alert(self, zone_event, frame):
         if not self.enabled:
             return

@@ -8,8 +8,29 @@ __pycache__/
 *.engine
 models/
 
-# Data (videos, images, crops)
-data/
+# Data (videos, images, crops). Use data/* (not data/) so we can re-include
+# the wet_floor scaffolding directories via .gitkeep markers below.
+data/*
+
+# Wet floor: track directory skeleton but ignore raw videos, frames,
+# and curated images.
+!data/wet_floor/
+data/wet_floor/*
+!data/wet_floor/raw_videos/
+!data/wet_floor/frames_session1/
+!data/wet_floor/curated/
+!data/wet_floor/public/
+data/wet_floor/raw_videos/*
+data/wet_floor/frames_session1/*
+data/wet_floor/curated/*
+data/wet_floor/public/*
+!data/wet_floor/curated/positives/
+!data/wet_floor/curated/negatives/
+!data/wet_floor/curated/holdout_test/
+data/wet_floor/curated/positives/*
+data/wet_floor/curated/negatives/*
+data/wet_floor/curated/holdout_test/*
+!data/wet_floor/**/.gitkeep
 
 # Test artifacts
 tests/test_frame.jpg

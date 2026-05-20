@@ -4,19 +4,30 @@ from ultralytics import YOLO
 
 class PPEDetector:
     def __init__(self, model_path, confidence=0.35, required_ppe=None,
-                 overlap_threshold=0.5):
+                 overlap_threshold=0.5, class_confidences=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.use_half = self.device != "cpu"
         self.model = YOLO(model_path)
         self.model.to(self.device)
         self.confidence = confidence
+        self.class_confidences = class_confidences or {}
         self.required_ppe = required_ppe or {"helmet", "vest"}
         self.overlap_threshold = overlap_threshold
         self.person_class = "person"
 
+        # YOLO drops boxes below `conf` before they reach us, so run inference
+        # at the floor of all per-class thresholds and filter in Python below.
+        if self.class_confidences:
+            self._inference_conf = min(self.confidence, min(self.class_confidences.values()))
+        else:
+            self._inference_conf = self.confidence
+
+    def _class_threshold(self, cls_name):
+        return self.class_confidences.get(cls_name, self.confidence)
+
     def detect(self, frame):
         detections = self.model.track(
-            frame, conf=self.confidence, verbose=False,
+            frame, conf=self._inference_conf, verbose=False,
             imgsz=480, persist=True, half=self.use_half
         )[0]
 
@@ -28,6 +39,9 @@ class PPEDetector:
             cls_id = int(box.cls[0])
             cls_name = self.model.names[cls_id]
             conf = float(box.conf[0])
+
+            if conf < self._class_threshold(cls_name):
+                continue
 
             track_id = int(box.id[0]) if box.id is not None else None
 

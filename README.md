@@ -35,6 +35,18 @@ Place YOLO model weights in the `models/` directory:
 
 Place your video in `data/sample_videos/` or update the source in `config/settings.py`.
 
+**Live RTSP camera:** export `CAMERA_RTSP_URL` before launch — keeps credentials out of git.
+
+```bash
+export CAMERA_RTSP_URL='rtsp://user:password@192.168.1.32:554/1/1'
+python3 src/main.py
+```
+
+The camera layer auto-detects RTSP URLs and applies: TCP transport (via
+`OPENCV_FFMPEG_CAPTURE_OPTIONS`, set in `main.py`), `CAP_PROP_BUFFERSIZE=1`
+to stay at the live edge, and auto-reconnect if reads stall for more than
+`CameraConfig.reconnect_after_seconds`.
+
 ## Usage
 
 ### Run the pipeline
@@ -63,6 +75,23 @@ Print the generated images from `data/qr_badges/` and attach to worker helmets o
 python3 -m pytest tests/ -v
 ```
 
+## Wet Floor Detection
+
+Disabled by default. Enabled by setting `WetFloorConfig.enabled = True` in
+`config/settings.py` **and** dropping a trained model at `models/wet_floor.pt`.
+Without both, the pipeline runs unchanged and the detector logs a single warning.
+
+### Extract training frames from a capture session
+
+```bash
+python scripts/extract_wet_floor_frames.py \
+    --video data/wet_floor/raw_videos/session1.mp4 \
+    --output-dir data/wet_floor/frames_session1
+```
+
+Optional flags: `--sample-every N` (default 5), `--hash-threshold N` (default 4,
+perceptual-hash distance for dedup), `--prefix STR` (default `wf`).
+
 ## Configuration
 
 All settings are in `config/settings.py`:
@@ -74,6 +103,7 @@ All settings are in `config/settings.py`:
 | `FallDetectionConfig` | `classifier_model_path`, `confidence`, `enabled` |
 | `DisplayConfig` | `max_display_width`, `window_name` |
 | `AlertConfig` | `endpoint`, `enabled`, `cooldown_seconds` |
+| `WetFloorConfig` | `enabled`, `model_path`, `confidence_threshold`, `min_area_pct`, `consecutive_frames_required` |
 
 ## Alert Payload
 
