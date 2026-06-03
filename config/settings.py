@@ -10,6 +10,14 @@ def _camera_source():
     return os.environ.get("CAMERA_RTSP_URL") or _DEFAULT_CAMERA_SOURCE
 
 
+_DEFAULT_ZONES_ENDPOINT = "http://203.0.113.10:8080/api/zones"
+
+
+def _zones_endpoint():
+    # ZONES_ENDPOINT lets deployments point zone uploads elsewhere without a code change.
+    return os.environ.get("ZONES_ENDPOINT") or _DEFAULT_ZONES_ENDPOINT
+
+
 @dataclass
 class CameraConfig:
     source: str = field(default_factory=_camera_source)
@@ -87,6 +95,8 @@ class ZoneConfig:
     zones: List[ZoneDefinition] = field(default_factory=list)
     alert_enabled: bool = True
     cooldown_seconds: float = 30.0
+    endpoint: str = field(default_factory=_zones_endpoint)
+    upload_enabled: bool = True          # POST zones to the server when they're created
 
 
 @dataclass

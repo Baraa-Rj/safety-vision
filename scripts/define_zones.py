@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import cv2
 import numpy as np
 from config.settings import PipelineConfig
+from src.zone_client import ZoneClient
 
 config = PipelineConfig()
 
@@ -90,8 +91,38 @@ def draw_overlay():
     return display
 
 
+def prompt_allowed_workers(zone_id):
+    """Ask the operator which worker IDs may enter this zone.
+
+    Blank input means an empty whitelist — ZoneMonitor treats that as
+    'deny everyone', so the zone is fully restricted.
+    """
+    try:
+        raw = input(
+            f"  Allowed worker IDs for '{zone_id}' "
+            f"(comma-separated, blank = none): "
+        ).strip()
+    except EOFError:
+        raw = ""
+    return [w.strip() for w in raw.split(",") if w.strip()]
+
+
+def finalize_zone(points):
+    global zone_counter
+    zone_id = f"restricted_{zone_counter}"
+    allowed = prompt_allowed_workers(zone_id)
+    zones.append({
+        "zone_id": zone_id,
+        "points": points,
+        "allowed_workers": allowed,
+    })
+    print(f"Zone '{zone_id}' defined with {len(points)} points, "
+          f"allowed_workers={allowed or '[]'}")
+    zone_counter += 1
+
+
 def mouse_callback(event, x, y, flags, param):
-    global current_points, zone_counter
+    global current_points
 
     # Map display coordinates back to original frame coordinates
     orig_x = int(x / scale)
@@ -102,11 +133,8 @@ def mouse_callback(event, x, y, flags, param):
 
     elif event == cv2.EVENT_RBUTTONDOWN:
         if len(current_points) >= 3:
-            zone_id = f"restricted_{zone_counter}"
-            zones.append({"zone_id": zone_id, "points": current_points.copy()})
-            print(f"Zone '{zone_id}' defined with {len(current_points)} points")
+            finalize_zone(current_points.copy())
             current_points = []
-            zone_counter += 1
         else:
             print("Need at least 3 points to define a zone")
 
@@ -136,9 +164,8 @@ while True:
     elif key == ord('s'):
         # Finish current zone if it has enough points
         if len(current_points) >= 3:
-            zone_id = f"restricted_{zone_counter}"
-            zones.append({"zone_id": zone_id, "points": current_points.copy()})
-            print(f"Zone '{zone_id}' defined with {len(current_points)} points")
+            finalize_zone(current_points.copy())
+            current_points = []
 
         if not zones:
             print("No zones defined. Nothing to save.")
@@ -151,13 +178,23 @@ while True:
             json.dump(zones, f, indent=2)
         print(f"\nSaved {len(zones)} zone(s) to {output_path}")
 
+        # Push to the server so the backend reflects the new zones. Local save
+        # above is already done, so a failed upload never loses the definitions.
+        zone_client = ZoneClient(config.zone.endpoint, enabled=config.zone.upload_enabled)
+        if zone_client.upload_zones(zones):
+            print(f"Uploaded {len(zones)} zone(s) to {config.zone.endpoint}")
+        else:
+            print(f"Zone upload to {config.zone.endpoint} did not complete (see log). "
+                  f"Zones are saved locally in {output_path}.")
+
         # Print config snippet
         print("\n--- Paste into config/settings.py ZoneConfig ---\n")
         print("@dataclass")
         print("class ZoneConfig:")
         print("    zones: List[ZoneDefinition] = field(default_factory=lambda: [")
         for z in zones:
-            print(f'        ZoneDefinition(zone_id="{z["zone_id"]}", points={z["points"]}),')
+            print(f'        ZoneDefinition(zone_id="{z["zone_id"]}", '
+                  f'points={z["points"]}, allowed_workers={z["allowed_workers"]}),')
         print("    ])")
         print("    alert_enabled: bool = True")
         print("    cooldown_seconds: float = 30.0")
