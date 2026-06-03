@@ -95,6 +95,7 @@ class ZoneDefinition:
     zone_id: str = ""
     points: List[List[int]] = field(default_factory=list)
     allowed_workers: List[str] = field(default_factory=list)
+    radius: int = 0  # keep-out distance in px around the polygon (0 = containment)
 
 
 @dataclass

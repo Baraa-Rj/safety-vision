@@ -55,6 +55,49 @@ def test_no_allowed_workers_denies_all():
     assert zm.is_permitted("zone_a", "W001") is False
 
 
+# --- machine proximity (radius) ---
+
+def _machine_monitor(radius):
+    zm = ZoneMonitor()
+    # 200x200 square footprint at [100..300, 100..300]
+    zm.add_zone("machine", [[100, 100], [300, 100], [300, 300], [100, 300]],
+                radius=radius)
+    return zm
+
+
+# bbox [340, 0, 360, 200] sits to the right of the machine; its nearest
+# lower-body point (left edge x=340) is 40 px from the footprint's right edge.
+
+def test_radius_zero_is_plain_containment():
+    zm = _machine_monitor(radius=0)
+    assert zm.check_person([340, 0, 360, 200]) is None
+
+
+def test_proximity_triggers_within_radius():
+    zm = _machine_monitor(radius=60)   # 40 px gap < 60 px keep-out -> breach
+    assert zm.check_person([340, 0, 360, 200]) == "machine"
+
+
+def test_proximity_clear_beyond_radius():
+    zm = _machine_monitor(radius=30)   # 40 px gap > 30 px keep-out -> clear
+    assert zm.check_person([340, 0, 360, 200]) is None
+
+
+def test_proximity_still_triggers_inside():
+    zm = _machine_monitor(radius=60)
+    assert zm.check_person([190, 0, 210, 200]) == "machine"
+
+
+def test_lower_band_detects_when_feet_occluded():
+    """Feet truncated/occluded: bbox bottom lands at the knees, above the zone.
+    The single-foot test would miss it; the lower band still catches it."""
+    zm = ZoneMonitor()
+    zm.add_zone("area", [[100, 300], [300, 300], [300, 400], [100, 400]])
+    # Person whose visible box bottom (y2=360) is inside the zone band even
+    # though it's not their true feet.
+    assert zm.check_person([150, 100, 250, 360]) == "area"
+
+
 def test_zone_breach_in_pipeline(dummy_frame):
     """Zone breach is detected and included in pipeline events."""
     from config.settings import PipelineConfig

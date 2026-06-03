@@ -132,15 +132,34 @@ def prompt_allowed_workers(zone_id):
     return [w.strip() for w in raw.split(",") if w.strip()]
 
 
+def prompt_radius(zone_id):
+    """Keep-out radius in pixels. 0 = plain area (foot must be inside).
+    >0 turns the polygon into a machine keep-out: triggers when feet come
+    within this many pixels of the polygon edge.
+    """
+    try:
+        raw = input(
+            f"  Keep-out radius in px for '{zone_id}' "
+            f"(0 = restricted area, >0 = machine proximity): "
+        ).strip()
+    except EOFError:
+        raw = ""
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
 def finalize_zone(points):
-    # Record geometry only. Worker IDs are collected after the GUI closes, so
-    # we never block on input() while the heavy window is held open.
+    # Record geometry only. Worker IDs / radius are collected after the GUI
+    # closes, so we never block on input() while the heavy window is held open.
     global zone_counter
     zone_id = f"restricted_{zone_counter}"
     zones.append({
         "zone_id": zone_id,
         "points": points,
         "allowed_workers": [],
+        "radius": 0,
     })
     print(f"Zone '{zone_id}' defined with {len(points)} points")
     zone_counter += 1
@@ -228,6 +247,7 @@ if save_requested:
     # Window is closed and the process is lean now — safe to prompt.
     for z in zones:
         z["allowed_workers"] = prompt_allowed_workers(z["zone_id"])
+        z["radius"] = prompt_radius(z["zone_id"])
     save_zones()
 
     # Push to the server. Local save already done, so a failed upload loses nothing.
@@ -245,7 +265,8 @@ if save_requested:
     print("    zones: List[ZoneDefinition] = field(default_factory=lambda: [")
     for z in zones:
         print(f'        ZoneDefinition(zone_id="{z["zone_id"]}", '
-              f'points={z["points"]}, allowed_workers={z["allowed_workers"]}),')
+              f'points={z["points"]}, allowed_workers={z["allowed_workers"]}, '
+              f'radius={z.get("radius", 0)}),')
     print("    ])")
     print("    alert_enabled: bool = True")
     print("    cooldown_seconds: float = 30.0")

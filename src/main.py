@@ -60,7 +60,10 @@ if config.zone.enabled:
         with open(zones_path) as f:
             zones_data = json.load(f)
         for zone in zones_data:
-            zone_monitor.add_zone(zone["zone_id"], zone["points"], zone.get("allowed_workers"))
+            zone_monitor.add_zone(
+                zone["zone_id"], zone["points"],
+                zone.get("allowed_workers"), radius=zone.get("radius", 0),
+            )
         logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
     else:
         logging.warning(f"No zones file found at {zones_path}")
