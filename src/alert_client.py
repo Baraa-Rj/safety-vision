@@ -110,9 +110,6 @@ class AlertClient:
 
     def _post_zone_alert(self, zone_event, frame):
         try:
-            _, buffer = cv2.imencode(".jpg", frame)
-            img_b64 = base64.b64encode(buffer).decode("utf-8")
-
             worker_id = zone_event.get("worker_id")
             worker_name = zone_event.get("worker_name")
             zone_id = zone_event.get("zone_id")
@@ -125,12 +122,16 @@ class AlertClient:
                 message = f"Unknown worker entered restricted zone {zone_id}"
 
             payload = {
-                "imgImage": img_b64,
                 "zoneId": zone_id,
                 "message": message,
             }
             if worker_id is not None:
+                # Identified worker: skip the frame to keep the payload small.
                 payload["userId"] = str(worker_id)
+            else:
+                # Unidentified worker: attach the frame for manual review.
+                _, buffer = cv2.imencode(".jpg", frame)
+                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
             if worker_name is not None:
                 payload["workerName"] = worker_name
 
@@ -142,9 +143,6 @@ class AlertClient:
 
     def _post_alert(self, violation, frame):
         try:
-            _, buffer = cv2.imencode(".jpg", frame)
-            img_b64 = base64.b64encode(buffer).decode("utf-8")
-
             missing = ", ".join(violation["missing"])
             worker_id = violation.get("worker_id")
 
@@ -154,12 +152,18 @@ class AlertClient:
                 message = f"Unknown worker missing {missing}"
 
             payload = {
-                "imgImage": img_b64,
                 "missingItem": missing,
                 "message": message,
             }
             if worker_id is not None:
+                # Identified worker: backend already knows who they are, so the
+                # frame adds no value — skip it to keep the payload small.
                 payload["userId"] = str(worker_id)
+            else:
+                # Unidentified worker: attach the frame so the violation can be
+                # reviewed manually.
+                _, buffer = cv2.imencode(".jpg", frame)
+                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
 
             response = requests.post(self.endpoint, json=payload, timeout=10)
             response.raise_for_status()
