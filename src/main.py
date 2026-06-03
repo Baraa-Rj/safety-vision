@@ -40,7 +40,12 @@ ppe_detector = PPEDetector(
     class_confidences=config.ppe.class_confidences,
     tracker_config=config.ppe.tracker_config,
 )
-fall_detector = None
+# Pose-based fall detection. Enable with FallDetectionConfig.enabled = True
+# (uses models/yolo26s-pose.pt — no trained fall model required).
+fall_detector = (
+    FallDetector(config.fall.pose_model_path, config.fall)
+    if config.fall.enabled else None
+)
 
 # Wet floor detection: enable by setting WetFloorConfig.enabled = True
 # AND providing models/wet_floor.pt. The detector is constructed unconditionally

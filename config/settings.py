@@ -49,8 +49,14 @@ class PPEConfig:
 
 @dataclass
 class FallDetectionConfig:
-    classifier_model_path: str = "models/fall_classifier/weights/best.pt"
-    confidence: float = 0.7
+    # Pose-based detector (no trained fall model needed).
+    pose_model_path: str = "models/yolo26s-pose.pt"
+    person_conf: float = 0.40               # pose person-detection confidence
+    min_keypoint_conf: float = 0.30         # ignore keypoints below this
+    torso_angle_threshold: float = 50.0     # deg from vertical; >= this = lying
+    aspect_ratio_threshold: float = 1.2     # fallback: kp-box width/height >= this
+    consecutive_frames: int = 5             # sustained frames before flagging a fall
+    match_iou: float = 0.3                  # IoU to match a pose to a PPE person box
     enabled: bool = False
 
 
@@ -62,6 +68,9 @@ class ComplianceConfig:
     track_timeout_seconds: float = 5.0
     uncertain_lower: float = 0.25
     uncertain_upper: float = 0.40
+    # A violation must be constant for this long before it's sent to the backend
+    # — filters single-frame false pops.
+    confirm_seconds: float = 15.0
 
 
 @dataclass

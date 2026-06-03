@@ -5,6 +5,7 @@ import threading
 from collections import deque
 
 from src.ppe_compliance_tracker import PPEComplianceTracker
+from src.violation_confirmer import ViolationConfirmer
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class SafetyPipeline:
         self.compliance_tracker = PPEComplianceTracker(
             config.compliance, self.required_items,
         )
+        # Time-based gate: only confirm a violation after it's been constant for
+        # config.compliance.confirm_seconds (filters single-frame false pops).
+        self.violation_confirmer = ViolationConfirmer(config.compliance.confirm_seconds)
         self._compliance_cleanup_counter = 0
 
         wf_required = (
@@ -127,6 +131,18 @@ class SafetyPipeline:
                             "Track %s: PPE %s compliance cleared", track_id, item,
                         )
 
+            # Feed the time-based confirmer every frame (compliant resets the
+            # streak). Key by the most stable identity we have.
+            is_violation = (i not in fall_indices) and (not result["compliant"])
+            conf_key = (
+                worker_id if worker_id is not None
+                else f"track_{track_id}" if track_id is not None
+                else f"loc_{(x1 + x2) // 2 // 50}_{(y1 + y2) // 2 // 50}"
+            )
+            confirmed = self.violation_confirmer.update(
+                conf_key, is_violation, events["timestamp"],
+            )
+
             if i in fall_indices:
                 events["falls"].append({
                     "worker_id": worker_id,
@@ -136,7 +152,7 @@ class SafetyPipeline:
                 })
             elif not result["compliant"]:
                 # Renderer reads ppe_violations for per-frame red boxes —
-                # keep it instantaneous so visuals don't lag the smoother.
+                # keep it instantaneous so visuals don't lag confirmation.
                 events["ppe_violations"].append({
                     "worker_id": worker_id,
                     "worker_name": worker_name,
@@ -148,29 +164,16 @@ class SafetyPipeline:
                     "zone": zone,
                 })
 
-                # Untracked detections bypass the smoother (safety-first:
-                # we can't accumulate history without an identity).
-                if track_id is None:
-                    events["confirmed_ppe_violations"].append({
-                        "worker_id": worker_id,
-                        "worker_name": worker_name,
-                        "qr_data": qr_data,
-                        "track_id": None,
-                        "bbox": result["person_bbox"],
-                        "missing": result["missing_ppe"],
-                        "detected": result["detected_ppe"],
-                        "zone": zone,
-                    })
-                elif tracker_actions and any(a == "alert" for a in tracker_actions.values()):
-                    current = self.compliance_tracker.get_state(track_id)
-                    alerted_items = [item for item, on in current.items() if on]
+                # Confirm for the backend only after a constant, sustained
+                # violation — this is what stops single-frame false alerts.
+                if confirmed:
                     events["confirmed_ppe_violations"].append({
                         "worker_id": worker_id,
                         "worker_name": worker_name,
                         "qr_data": qr_data,
                         "track_id": track_id,
                         "bbox": result["person_bbox"],
-                        "missing": alerted_items,
+                        "missing": result["missing_ppe"],
                         "detected": result["detected_ppe"],
                         "zone": zone,
                     })
@@ -197,6 +200,7 @@ class SafetyPipeline:
         self._compliance_cleanup_counter += 1
         if self._compliance_cleanup_counter >= _COMPLIANCE_CLEANUP_EVERY:
             self.compliance_tracker.cleanup_stale(current_ts=events["timestamp"])
+            self.violation_confirmer.cleanup(events["timestamp"])
             self._compliance_cleanup_counter = 0
 
         if self.wet_floor_detector is not None and self.wet_floor_detector.config.enabled:
