@@ -56,6 +56,7 @@ class SafetyPipeline:
         self._wet_floor_history = deque(maxlen=wf_required)
         self._wet_floor_first_seen_ts = None
 
+        self._detection_thread = None
         self._events_lock = threading.Lock()
         self._latest_events = {
             "ppe_violations": [],
@@ -284,7 +285,8 @@ class SafetyPipeline:
         fps = self.camera.stream.get(cv2.CAP_PROP_FPS) or 25
         frame_period = 1.0 / fps
 
-        threading.Thread(target=self._detection_loop, daemon=True).start()
+        self._detection_thread = threading.Thread(target=self._detection_loop, daemon=True)
+        self._detection_thread.start()
 
         while self.running:
             loop_start = time.perf_counter()
@@ -311,6 +313,13 @@ class SafetyPipeline:
 
     def stop(self):
         self.running = False
+        # Let the detection thread finish its current frame before we tear down
+        # the camera and OpenCV windows — otherwise it can be mid-inference or
+        # mid-imshow when the interpreter exits, which crashes the C++ runtime
+        # ("terminate called without an active exception").
+        if self._detection_thread is not None:
+            self._detection_thread.join(timeout=5.0)
+            self._detection_thread = None
         self.camera.stop()
         cv2.destroyAllWindows()
         print("Pipeline stopped.")

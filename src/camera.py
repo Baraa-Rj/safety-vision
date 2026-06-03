@@ -88,8 +88,7 @@ class CameraStream:
                 continue
 
             # For RTSP, treat a stretch of failed reads as a dropped connection
-            # and rebuild the capture. For files, just keep looping until EOF
-            # behavior settles (preserves prior behavior).
+            # and rebuild the capture.
             if self._rtsp and time.monotonic() - last_good > self._reconnect_after:
                 logger.warning("No RTSP frames for %.1fs; reconnecting...",
                                time.monotonic() - last_good)
@@ -103,5 +102,11 @@ class CameraStream:
                 if self.stream is None:
                     # _open already slept through its backoff; loop and retry.
                     continue
+            elif not self._rtsp and self.stream is not None:
+                # File source hit EOF: rewind so playback loops instead of
+                # freezing on the last frame. The brief sleep guards against a
+                # hot spin if the source turns out to be non-seekable.
+                self.stream.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                time.sleep(0.005)
             else:
                 time.sleep(0.01)
