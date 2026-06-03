@@ -10,10 +10,13 @@ logger = logging.getLogger("safety_vision")
 
 
 class AlertClient:
-    def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0):
+    def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
+                 zone_endpoint="", wet_floor_endpoint=""):
         self.endpoint = endpoint
         self.enabled = enabled
         self.cooldown_seconds = cooldown_seconds
+        self.zone_endpoint = zone_endpoint
+        self.wet_floor_endpoint = wet_floor_endpoint
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
 
@@ -42,7 +45,7 @@ class AlertClient:
         self._executor.submit(self._post_alert, violation, frame)
 
     def send_wet_floor_alert(self, wf_event, frame):
-        if not self.enabled:
+        if not self.enabled or not self.wet_floor_endpoint:
             return
 
         # Bucket centroid so jittery bboxes share a cooldown key.
@@ -77,14 +80,14 @@ class AlertClient:
                 "message": "Wet floor detected",
             }
 
-            response = requests.post(self.endpoint, json=payload, timeout=10)
+            response = requests.post(self.wet_floor_endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[WET FLOOR ALERT SENT] bbox=%s", wf_event["bbox"])
         except Exception as e:
             logger.error("[WET FLOOR ALERT FAILED] %s", e)
 
     def send_zone_alert(self, zone_event, frame):
-        if not self.enabled:
+        if not self.enabled or not self.zone_endpoint:
             return
 
         worker_id = zone_event.get("worker_id")
@@ -135,7 +138,7 @@ class AlertClient:
             if worker_name is not None:
                 payload["workerName"] = worker_name
 
-            response = requests.post(self.endpoint, json=payload, timeout=10)
+            response = requests.post(self.zone_endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[ZONE ALERT SENT] %s", message)
         except Exception as e:

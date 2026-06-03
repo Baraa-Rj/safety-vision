@@ -4,7 +4,8 @@ from ultralytics import YOLO
 
 class PPEDetector:
     def __init__(self, model_path, confidence=0.35, required_ppe=None,
-                 overlap_threshold=0.5, class_confidences=None):
+                 overlap_threshold=0.5, class_confidences=None,
+                 tracker_config="botsort.yaml"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.use_half = self.device != "cpu"
         self.model = YOLO(model_path)
@@ -13,6 +14,7 @@ class PPEDetector:
         self.class_confidences = class_confidences or {}
         self.required_ppe = required_ppe or {"helmet", "vest"}
         self.overlap_threshold = overlap_threshold
+        self.tracker_config = tracker_config
         self.person_class = "person"
 
         # YOLO drops boxes below `conf` before they reach us, so run inference
@@ -28,7 +30,8 @@ class PPEDetector:
     def detect(self, frame):
         detections = self.model.track(
             frame, conf=self._inference_conf, verbose=False,
-            imgsz=480, persist=True, half=self.use_half
+            imgsz=480, persist=True, half=self.use_half,
+            tracker=self.tracker_config,
         )[0]
 
         persons = []

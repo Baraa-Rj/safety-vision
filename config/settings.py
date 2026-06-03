@@ -42,6 +42,9 @@ class PPEConfig:
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
     process_every_n: int = 3
+    # Custom BoT-SORT config: larger track_buffer + ReID so a worker keeps the
+    # same track_id (and thus their cached QR identity) across movement.
+    tracker_config: str = "config/botsort_persistent.yaml"
 
 
 @dataclass
@@ -78,9 +81,13 @@ class DisplayConfig:
 
 @dataclass
 class AlertConfig:
-    endpoint: str = "http://203.0.113.10:8080/api/ppe-alerts"
-    enabled: bool = False
-    cooldown_seconds: float = 30.0
+    endpoint: str = "http://203.0.113.10:8080/api/ppe-alerts/create"
+    enabled: bool = True
+    cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
+    # Zone / wet-floor alerts POST a different payload shape; leave blank to
+    # disable them so they never hit the PPE endpoint with the wrong body.
+    zone_endpoint: str = ""
+    wet_floor_endpoint: str = ""
 
 
 @dataclass
@@ -92,6 +99,7 @@ class ZoneDefinition:
 
 @dataclass
 class ZoneConfig:
+    enabled: bool = False                # zone monitoring off for now; flip to re-enable
     zones: List[ZoneDefinition] = field(default_factory=list)
     alert_enabled: bool = True
     cooldown_seconds: float = 30.0

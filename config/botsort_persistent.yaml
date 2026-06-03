@@ -1,0 +1,26 @@
+# BoT-SORT tuned to keep a worker's track_id stable across movement/occlusion.
+# Worker identity (QR) is cached per track_id, so a stable ID == persistent
+# identity. See src/ppe_detector.py (passed via `tracker=`) and src/worker_id.py.
+
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 120 # frames to keep a lost track alive before deleting (default 30).
+                  # ~4s at 30 FPS — bridges a worker turning away / brief occlusion
+                  # so they keep the same ID instead of being re-acquired as new.
+match_thresh: 0.8
+fuse_score: True
+
+# Fixed RTSP camera — no global motion to compensate, so skip it (faster).
+gmc_method: none
+
+# ReID disabled: in ultralytics 8.4.x `model: auto` pulls a second model and was
+# flaky here, and the box is memory-constrained. The large track_buffer above is
+# the primary persistence lever (motion/IoU association across occlusion). Flip
+# with_reid back on (with a known ReID weight, not "auto") if motion alone proves
+# insufficient and you have the RAM.
+with_reid: False
+model: auto
+proximity_thresh: 0.5
+appearance_thresh: 0.8

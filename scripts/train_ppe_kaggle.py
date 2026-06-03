@@ -23,11 +23,41 @@ Why this exists separately from train_ppe.py:
 
 import os
 
+import glob
+
 import torch
 from ultralytics import YOLO
 
-DATASET_DIR = os.environ.get("DATASET_DIR", "/kaggle/input/ppe-dataset/ppe_dataset")
-MODEL_PATH = os.environ.get("MODEL_PATH", "/kaggle/input/ppe-weights/best.pt")
+
+def _find_dataset_dir():
+    # Honor an explicit override, else locate the folder holding train/images
+    # anywhere under /kaggle/input — robust to whatever the dataset slug is.
+    env = os.environ.get("DATASET_DIR")
+    if env and os.path.isdir(os.path.join(env, "train", "images")):
+        return env
+    hits = glob.glob("/kaggle/input/**/train/images", recursive=True)
+    if hits:
+        return os.path.dirname(os.path.dirname(hits[0]))  # .../train/images -> ...
+    raise FileNotFoundError(
+        "No 'train/images' folder found under /kaggle/input. "
+        "Attach the dataset, or set DATASET_DIR."
+    )
+
+
+def _find_weights():
+    env = os.environ.get("MODEL_PATH")
+    if env and os.path.isfile(env):
+        return env
+    hits = glob.glob("/kaggle/input/**/best.pt", recursive=True)
+    if hits:
+        return hits[0]
+    raise FileNotFoundError(
+        "No 'best.pt' found under /kaggle/input. Attach the weights, or set MODEL_PATH."
+    )
+
+
+DATASET_DIR = _find_dataset_dir()
+MODEL_PATH = _find_weights()
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/kaggle/working/runs")
 
 # Ultralytics needs a data yaml whose `path` matches where the images actually

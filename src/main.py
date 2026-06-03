@@ -38,6 +38,7 @@ ppe_detector = PPEDetector(
     required_ppe=config.ppe.required_ppe,
     overlap_threshold=config.ppe.overlap_threshold,
     class_confidences=config.ppe.class_confidences,
+    tracker_config=config.ppe.tracker_config,
 )
 fall_detector = None
 
@@ -50,18 +51,32 @@ wet_floor_detector = WetFloorDetector(config.wet_floor) if config.wet_floor.enab
 worker_id = WorkerIdentifier()
 zone_monitor = ZoneMonitor()
 
-zones_path = os.path.join(os.path.dirname(__file__), "..", "data", "zones.json")
-if os.path.exists(zones_path):
-    with open(zones_path) as f:
-        zones_data = json.load(f)
-    for zone in zones_data:
-        zone_monitor.add_zone(zone["zone_id"], zone["points"], zone.get("allowed_workers"))
-    logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
+# Zone monitoring is disabled for now (ZoneConfig.enabled). With no zones loaded,
+# the monitor reports no breaches and the renderer draws no polygons — the rest
+# of the pipeline is unaffected. Flip ZoneConfig.enabled = True to restore it.
+if config.zone.enabled:
+    zones_path = os.path.join(os.path.dirname(__file__), "..", "data", "zones.json")
+    if os.path.exists(zones_path):
+        with open(zones_path) as f:
+            zones_data = json.load(f)
+        for zone in zones_data:
+            zone_monitor.add_zone(zone["zone_id"], zone["points"], zone.get("allowed_workers"))
+        logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
+    else:
+        logging.warning(f"No zones file found at {zones_path}")
 else:
-    logging.warning(f"No zones file found at {zones_path}")
+    logging.info("Zone monitoring disabled (ZoneConfig.enabled = False)")
 
 renderer = FrameRenderer(zone_monitor, config.display)
 event_logger = EventLogger()
+
+alert_client = AlertClient(
+    config.alert.endpoint,
+    enabled=config.alert.enabled,
+    cooldown_seconds=config.alert.cooldown_seconds,
+    zone_endpoint=config.alert.zone_endpoint,
+    wet_floor_endpoint=config.alert.wet_floor_endpoint,
+) if config.alert.enabled else None
 
 pipeline = SafetyPipeline(
     config=config,
@@ -72,7 +87,7 @@ pipeline = SafetyPipeline(
     zone_monitor=zone_monitor,
     renderer=renderer,
     event_logger=event_logger,
-    alert_client=None,
+    alert_client=alert_client,
     wet_floor_detector=wet_floor_detector,
 )
 

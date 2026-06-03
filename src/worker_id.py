@@ -19,6 +19,10 @@ class WorkerIdentifier:
         if track_id is not None:
             cached = self._cache.get(track_id)
             if cached is not None and (now - cached["timestamp"]) < self._cache_ttl:
+                # Refresh on hit so a worker's identity stays attached for the
+                # whole life of the track — once scanned, we don't force a
+                # re-read just because the QR went out of view for a while.
+                cached["timestamp"] = now
                 return cached["result"]
 
             if self._fail_count.get(track_id, 0) >= self._max_failed_attempts:

@@ -15,11 +15,20 @@ Output:
     Also saves to data/zones.json for programmatic loading.
 """
 
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# RTSP needs TCP transport + a socket timeout, set BEFORE cv2 is imported
+# (OpenCV reads this env var at module load). Mirrors src/main.py so the frame
+# we draw zones on comes through the same path the pipeline uses.
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|stimeout;5000000",
+)
+
+import json
 
 import cv2
 import numpy as np
@@ -27,23 +36,39 @@ from config.settings import PipelineConfig
 from src.zone_client import ZoneClient
 
 config = PipelineConfig()
+source = config.camera.source
+is_rtsp = isinstance(source, str) and source.lower().startswith("rtsp://")
+print(f"Capturing a frame from: {source}")
 
-# Grab the first frame from video source
-cap = cv2.VideoCapture(config.camera.source)
+cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG) if is_rtsp else cv2.VideoCapture(source)
 if not cap.isOpened():
-    print(f"Cannot open {config.camera.source}")
+    print(f"Cannot open {source}")
     sys.exit(1)
 
-ret, frame = cap.read()
+# Grab a frame to draw on. The first RTSP reads can be empty or a pre-keyframe
+# (garbled green/gray), so warm up and keep the latest good frame.
+frame = None
+if is_rtsp:
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    for _ in range(30):
+        ret, f = cap.read()
+        if ret and f is not None:
+            frame = f
+else:
+    ret, f = cap.read()
+    if ret:
+        frame = f
 cap.release()
 
-if not ret:
+if frame is None:
     print("Failed to read a frame")
     sys.exit(1)
 
 zones = []
 current_points = []
 zone_counter = 1
+pending_zone_points = None  # finished polygon awaiting the worker-ID prompt
+save_requested = False
 
 # Scale frame for display if too large
 MAX_DISPLAY_WIDTH = 960
@@ -108,21 +133,28 @@ def prompt_allowed_workers(zone_id):
 
 
 def finalize_zone(points):
+    # Record geometry only. Worker IDs are collected after the GUI closes, so
+    # we never block on input() while the heavy window is held open.
     global zone_counter
     zone_id = f"restricted_{zone_counter}"
-    allowed = prompt_allowed_workers(zone_id)
     zones.append({
         "zone_id": zone_id,
         "points": points,
-        "allowed_workers": allowed,
+        "allowed_workers": [],
     })
-    print(f"Zone '{zone_id}' defined with {len(points)} points, "
-          f"allowed_workers={allowed or '[]'}")
+    print(f"Zone '{zone_id}' defined with {len(points)} points")
     zone_counter += 1
 
 
+def save_zones(path="data/zones.json"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(zones, f, indent=2)
+    return path
+
+
 def mouse_callback(event, x, y, flags, param):
-    global current_points
+    global current_points, pending_zone_points
 
     # Map display coordinates back to original frame coordinates
     orig_x = int(x / scale)
@@ -133,7 +165,10 @@ def mouse_callback(event, x, y, flags, param):
 
     elif event == cv2.EVENT_RBUTTONDOWN:
         if len(current_points) >= 3:
-            finalize_zone(current_points.copy())
+            # Hand the finished polygon to the main loop. Prompting for worker
+            # IDs with input() *here* would block inside the GUI event callback,
+            # which crashes the HighGUI backend.
+            pending_zone_points = current_points.copy()
             current_points = []
         else:
             print("Need at least 3 points to define a zone")
@@ -152,6 +187,12 @@ while True:
     cv2.imshow(window_name, display)
     key = cv2.waitKey(30) & 0xFF
 
+    # A right-click finished a zone — record it (no blocking prompt while the
+    # window is up; worker IDs are collected after the GUI closes).
+    if pending_zone_points is not None:
+        finalize_zone(pending_zone_points)
+        pending_zone_points = None
+
     if key == ord('q'):
         print("Quit without saving.")
         break
@@ -162,7 +203,7 @@ while True:
             print("Undid last point")
 
     elif key == ord('s'):
-        # Finish current zone if it has enough points
+        # Finish the in-progress zone if it has enough points, then leave the GUI.
         if len(current_points) >= 3:
             finalize_zone(current_points.copy())
             current_points = []
@@ -171,33 +212,40 @@ while True:
             print("No zones defined. Nothing to save.")
             break
 
-        # Save to JSON
-        output_path = "data/zones.json"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(zones, f, indent=2)
-        print(f"\nSaved {len(zones)} zone(s) to {output_path}")
-
-        # Push to the server so the backend reflects the new zones. Local save
-        # above is already done, so a failed upload never loses the definitions.
-        zone_client = ZoneClient(config.zone.endpoint, enabled=config.zone.upload_enabled)
-        if zone_client.upload_zones(zones):
-            print(f"Uploaded {len(zones)} zone(s) to {config.zone.endpoint}")
-        else:
-            print(f"Zone upload to {config.zone.endpoint} did not complete (see log). "
-                  f"Zones are saved locally in {output_path}.")
-
-        # Print config snippet
-        print("\n--- Paste into config/settings.py ZoneConfig ---\n")
-        print("@dataclass")
-        print("class ZoneConfig:")
-        print("    zones: List[ZoneDefinition] = field(default_factory=lambda: [")
-        for z in zones:
-            print(f'        ZoneDefinition(zone_id="{z["zone_id"]}", '
-                  f'points={z["points"]}, allowed_workers={z["allowed_workers"]}),')
-        print("    ])")
-        print("    alert_enabled: bool = True")
-        print("    cooldown_seconds: float = 30.0")
+        save_requested = True
         break
 
+# Tear the window down BEFORE prompting/saving. On a memory-starved machine,
+# holding the heavy GUI open while blocked on input() invites the OOM killer.
 cv2.destroyAllWindows()
+
+if save_requested:
+    # Persist geometry FIRST (empty permissions) so the polygons are never lost,
+    # even if the worker-ID prompt below is interrupted.
+    output_path = save_zones()
+    print(f"\nSaved {len(zones)} zone(s) to {output_path}")
+
+    # Window is closed and the process is lean now — safe to prompt.
+    for z in zones:
+        z["allowed_workers"] = prompt_allowed_workers(z["zone_id"])
+    save_zones()
+
+    # Push to the server. Local save already done, so a failed upload loses nothing.
+    zone_client = ZoneClient(config.zone.endpoint, enabled=config.zone.upload_enabled)
+    if zone_client.upload_zones(zones):
+        print(f"Uploaded {len(zones)} zone(s) to {config.zone.endpoint}")
+    else:
+        print(f"Zone upload to {config.zone.endpoint} did not complete (see log). "
+              f"Zones are saved locally in {output_path}.")
+
+    # Print config snippet
+    print("\n--- Paste into config/settings.py ZoneConfig ---\n")
+    print("@dataclass")
+    print("class ZoneConfig:")
+    print("    zones: List[ZoneDefinition] = field(default_factory=lambda: [")
+    for z in zones:
+        print(f'        ZoneDefinition(zone_id="{z["zone_id"]}", '
+              f'points={z["points"]}, allowed_workers={z["allowed_workers"]}),')
+    print("    ])")
+    print("    alert_enabled: bool = True")
+    print("    cooldown_seconds: float = 30.0")
