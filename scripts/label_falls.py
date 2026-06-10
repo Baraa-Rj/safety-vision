@@ -27,13 +27,13 @@ import os
 
 import cv2
 
-MAX_W = 1280
-
 
 def parse_args():
     p = argparse.ArgumentParser(description="Mark fall start/end frames into labels.csv")
     p.add_argument("--videos", nargs="+", required=True, help="Video files (globs ok)")
     p.add_argument("--labels", default="labels.csv")
+    p.add_argument("--max-width", type=int, default=900,
+                   help="Display width in px; the frame is scaled to fit (default 900)")
     return p.parse_args()
 
 
@@ -46,7 +46,7 @@ def append_row(path, video, start, end):
         w.writerow([video, start, end, ""])
 
 
-def label_video(path, labels_path):
+def label_video(path, labels_path, max_w):
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         print(f"cannot open {path}, skipping")
@@ -55,11 +55,26 @@ def label_video(path, labels_path):
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     win = "label_falls"
-    cv2.namedWindow(win)
+    cv2.namedWindow(win)   # AUTOSIZE: window fits the scaled frame exactly
+
+    # Seek bar. The callback fires while OpenCV processes window events during
+    # waitKey; `guard` suppresses the echo when we set the position ourselves.
+    nav = {"target": None, "guard": False}
+
+    def on_seek(pos):
+        if not nav["guard"]:
+            nav["target"] = pos
+
+    if total:
+        cv2.createTrackbar("seek", win, 0, max(total - 1, 1), on_seek)
 
     idx, playing, pending_start = 0, False, None
     while True:
         idx = max(0, min(idx, total - 1)) if total else max(0, idx)
+        if total:
+            nav["guard"] = True
+            cv2.setTrackbarPos("seek", win, idx)
+            nav["guard"] = False
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ok, frame = cap.read()
         if not ok:
@@ -72,17 +87,24 @@ def label_video(path, labels_path):
 
         disp = frame.copy()
         h, w = disp.shape[:2]
-        if w > MAX_W:
-            disp = cv2.resize(disp, (MAX_W, int(h * MAX_W / w)))
+        if w > max_w:
+            disp = cv2.resize(disp, (max_w, int(h * max_w / w)))
         ps = f"START={pending_start}" if pending_start is not None else "START=-"
         cv2.putText(disp, f"{name}  frame {idx}/{max(total-1,0)}  fps~{fps:.0f}  {ps}",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(disp, "d/a step  f/b x10  space play  s start  e end  u undo  n next  q quit",
+        cv2.putText(disp, "drag bar to seek | a/d 1  b/f 10  ,/. 50  [/] 100  space play  s start  e end  u undo  n next  q quit",
                     (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(int(1000 / fps) if playing else 0) & 0xFF
-        if playing and key == 255:          # no key during playback
+
+        if nav["target"] is not None:        # user dragged the seek bar
+            idx = nav["target"]
+            nav["target"] = None
+            playing = False
+            continue
+
+        if playing and key == 255:           # no key during playback
             idx += 1
             if total and idx >= total - 1:
                 playing = False
@@ -104,6 +126,14 @@ def label_video(path, labels_path):
             idx += 10
         elif key == ord('b'):
             idx -= 10
+        elif key == ord('.'):
+            idx += 50
+        elif key == ord(','):
+            idx -= 50
+        elif key == ord(']'):
+            idx += 100
+        elif key == ord('['):
+            idx -= 100
         elif key == ord('s'):
             pending_start = idx
             print(f"  {name}: start={idx}")
@@ -134,7 +164,7 @@ def main():
         raise SystemExit("No videos matched.")
     print(f"Labeling {len(videos)} video(s) -> {args.labels}\n")
     for v in videos:
-        if not label_video(v, args.labels):
+        if not label_video(v, args.labels, args.max_width):
             break
     print(f"\nDone. labels.csv: {args.labels}")
 
