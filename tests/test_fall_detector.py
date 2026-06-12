@@ -36,7 +36,7 @@ def _feed(det, clock, dt=0.1, **det_kwargs):
 # --- gate ---
 
 def test_sustained_fallen_fires_after_consecutive_frames(clock):
-    d = _make(consecutive_frames=3, fallen_conf=0.4)
+    d = _make(consecutive_frames=3, fallen_conf=0.4, alert_delay_seconds=0)
     assert _feed(d, clock) == []        # streak 1
     assert _feed(d, clock) == []        # streak 2
     falls = _feed(d, clock)             # streak 3 -> fire
@@ -83,7 +83,8 @@ def test_long_gap_resets_the_streak(clock):
 # --- severity ---
 
 def test_severity_escalates_low_medium_high(clock):
-    d = _make(consecutive_frames=2, medium_seconds=3, high_still_seconds=8)
+    d = _make(consecutive_frames=2, medium_seconds=3, high_still_seconds=8,
+              alert_delay_seconds=0)
     alerts = []
     for _ in range(12):                 # feed a still body at 1s intervals
         clock[0] += 1.0
@@ -93,8 +94,26 @@ def test_severity_escalates_low_medium_high(clock):
     assert alerts == ["LOW", "MEDIUM", "HIGH"]
 
 
+def test_no_backend_alert_before_delay_then_fires(clock):
+    # Fall is detected/reported immediately, but alert is held until the fall has
+    # persisted alert_delay_seconds (filters brief false positives).
+    d = _make(consecutive_frames=1, alert_delay_seconds=10,
+              medium_seconds=5, high_still_seconds=100)
+    seen_before = False
+    fired_at = None
+    for _ in range(140):                # ~14s at 0.1s steps
+        clock[0] += 0.1
+        for fr in d.detect([_det()]):
+            seen_before = True          # detected/reported the whole time
+            if fr["alert"] and fired_at is None:
+                fired_at = round(clock[0] - 1000, 1)
+    assert seen_before                  # reported on screen before the alert
+    assert fired_at is not None and fired_at >= 10.0   # alert only after 10s
+
+
 def test_no_realert_within_same_tier(clock):
-    d = _make(consecutive_frames=1, medium_seconds=100, high_still_seconds=100)
+    d = _make(consecutive_frames=1, medium_seconds=100, high_still_seconds=100,
+              alert_delay_seconds=0)
     first = _feed(d, clock)
     assert first[0]["severity"] == "LOW" and first[0]["alert"] is True
     again = _feed(d, clock)
@@ -105,7 +124,7 @@ def test_motion_prevents_high_severity(clock):
     # A worker who keeps moving never hits HIGH (stillness resets), but still
     # reaches MEDIUM by duration.
     d = _make(consecutive_frames=1, medium_seconds=3, high_still_seconds=5,
-              still_motion_px=15)
+              still_motion_px=15, alert_delay_seconds=0)
     alerts = []
     x = 0
     for _ in range(10):
@@ -119,7 +138,8 @@ def test_motion_prevents_high_severity(clock):
 
 
 def test_recovery_starts_a_fresh_low_event(clock):
-    d = _make(consecutive_frames=1, medium_seconds=3, high_still_seconds=100)
+    d = _make(consecutive_frames=1, medium_seconds=3, high_still_seconds=100,
+              alert_delay_seconds=0)
     for _ in range(5):                  # escalate to MEDIUM
         clock[0] += 1.0
         d.detect([_det()])

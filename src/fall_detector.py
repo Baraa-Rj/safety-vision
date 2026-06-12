@@ -31,6 +31,7 @@ class FallDetector:
         self.consecutive = config.consecutive_frames
         self.min_size = config.min_size
         self.max_aspect_ratio = config.max_aspect_ratio
+        self.alert_delay_seconds = config.alert_delay_seconds
         self.still_motion_px = config.still_motion_px
         self.medium_seconds = config.medium_seconds
         self.high_still_seconds = config.high_still_seconds
@@ -104,8 +105,11 @@ class FallDetector:
                 self._moving_since.setdefault(key, now)
 
             tier, still_seconds = self._severity(key, now)
+            duration = now - self._fall_since[key]
+            # Hold the first backend alert until the fall has persisted
+            # alert_delay_seconds; after that, alert on each escalated tier.
             prev_tier = self._alerted_tier.get(key, -1)
-            alert = _TIERS[tier] > prev_tier
+            alert = duration >= self.alert_delay_seconds and _TIERS[tier] > prev_tier
             if alert:
                 self._alerted_tier[key] = _TIERS[tier]
 

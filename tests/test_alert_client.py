@@ -86,15 +86,25 @@ def test_fall_alert_payload_shape_identified(monkeypatch):
     assert captured["url"] == "http://x/api/fall-alerts/create"
 
 
-def test_fall_alert_unidentified_has_empty_userid_but_keeps_image(monkeypatch):
+def test_fall_alert_unidentified_uses_fallback_user_id(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    fall_endpoint="http://x/api/fall-alerts/create",
+                    fall_unidentified_user_id="UNKNOWN-1")
+    c._post_fall_alert({"worker_id": None, "severity": "LOW"}, FRAME)
+
+    p = captured["json"]
+    assert p["userId"] == "UNKNOWN-1"     # sentinel FK for anonymous falls
+    assert p["imgImage"]
+
+
+def test_fall_alert_skipped_when_unidentified_and_no_fallback(monkeypatch):
     captured = _capture_post(monkeypatch)
     c = AlertClient("http://x/ppe", enabled=True,
                     fall_endpoint="http://x/api/fall-alerts/create")
     c._post_fall_alert({"worker_id": None, "severity": "LOW"}, FRAME)
 
-    p = captured["json"]
-    assert p["userId"] == ""
-    assert p["imgImage"]
+    assert captured == {}                 # no POST attempted (would 500)
 
 
 def test_send_fall_alert_noop_without_endpoint():

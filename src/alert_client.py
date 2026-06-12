@@ -11,13 +11,15 @@ logger = logging.getLogger("safety_vision")
 
 class AlertClient:
     def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
-                 zone_endpoint="", wet_floor_endpoint="", fall_endpoint=""):
+                 zone_endpoint="", wet_floor_endpoint="", fall_endpoint="",
+                 fall_unidentified_user_id=""):
         self.endpoint = endpoint
         self.enabled = enabled
         self.cooldown_seconds = cooldown_seconds
         self.zone_endpoint = zone_endpoint
         self.wet_floor_endpoint = wet_floor_endpoint
         self.fall_endpoint = fall_endpoint
+        self.fall_unidentified_user_id = fall_unidentified_user_id
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
 
@@ -158,14 +160,24 @@ class AlertClient:
             worker_name = fall.get("worker_name")
             severity = fall.get("severity") or "LOW"
 
-            who = worker_name or worker_id or "Unknown worker"
+            # The backend requires a userId FK. Use the worker's id if known,
+            # else the configured sentinel for anonymous falls. With no sentinel
+            # set, skip rather than POST a request the backend will reject.
+            user_id = worker_id if worker_id is not None else self.fall_unidentified_user_id
+            if not user_id:
+                logger.warning(
+                    "[FALL ALERT SKIPPED] unidentified worker and no "
+                    "fall_unidentified_user_id configured")
+                return
+
+            who = worker_name or worker_id or "Unidentified worker"
             message = f"{who} has fallen ({severity})"
 
             # Falls always carry the frame regardless of identity — responders
             # need to see the scene to gauge the situation.
             _, buffer = cv2.imencode(".jpg", frame)
             payload = {
-                "userId": str(worker_id) if worker_id is not None else "",
+                "userId": str(user_id),
                 "severity": severity,
                 "imgImage": base64.b64encode(buffer).decode("utf-8"),
                 "message": message,

@@ -82,6 +82,7 @@ alert_client = AlertClient(
     zone_endpoint=config.alert.zone_endpoint,
     wet_floor_endpoint=config.alert.wet_floor_endpoint,
     fall_endpoint=config.alert.fall_endpoint,
+    fall_unidentified_user_id=config.alert.fall_unidentified_user_id,
 ) if config.alert.enabled else None
 
 pipeline = SafetyPipeline(

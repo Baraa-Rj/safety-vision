@@ -77,6 +77,10 @@ class FallDetectionConfig:
     # Severity (triage priority) thresholds. Severity escalates the longer a
     # worker stays down and the stiller they are; a backend alert is sent on the
     # first confirmation and again each time the tier rises (LOW->MEDIUM->HIGH).
+    # No backend alert until a fall has persisted this long — filters brief
+    # false positives (a stumble or quick crouch). The fall is still detected and
+    # drawn on screen immediately; only the alert (POST) waits.
+    alert_delay_seconds: float = 10.0
     still_motion_px: int = 15               # centroid move below this = "still"
     medium_seconds: float = 5.0             # on the ground this long -> MEDIUM
     high_still_seconds: float = 20.0        # motionless this long -> HIGH (urgent)
@@ -126,6 +130,12 @@ class AlertConfig:
     wet_floor_endpoint: str = ""
     # Falls have a dedicated endpoint + payload, so this is derived (not blank).
     fall_endpoint: str = field(default_factory=_fall_endpoint)
+    # The fall endpoint requires a userId FK. A fallen worker often can't be
+    # identified, so anonymous falls are sent under this sentinel user id (a real
+    # row that must exist in the backend). Set FALL_UNIDENTIFIED_USER_ID; if
+    # blank, anonymous falls are skipped rather than POSTing a failing request.
+    fall_unidentified_user_id: str = field(
+        default_factory=lambda: os.environ.get("FALL_UNIDENTIFIED_USER_ID", ""))
 
 
 @dataclass
