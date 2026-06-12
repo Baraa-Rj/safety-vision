@@ -1,149 +1,122 @@
 # Safety Vision
 
-Real-time PPE compliance monitoring system using computer vision. Detects workers missing safety equipment (helmets, vests), identifies them via QR codes, and sends alerts to a remote server.
+Real-time worksite safety monitoring with computer vision. A single camera feed is
+analysed for PPE compliance, worker identity, restricted-zone entry, and falls, with
+violations pushed to a backend over HTTP.
 
 ## Features
 
-- **PPE Detection** — YOLO-based detection of helmets and vests on workers
-- **QR Worker Identification** — Reads QR codes on badges to identify workers by name and ID
-- **Zone Monitoring** — Geofencing to detect workers in restricted areas
-- **Real-time Alerts** — Sends violation alerts (with frame + worker info) to a remote server via HTTP POST
-- **Fall Detection** — YOLO classifier for fallen/standing poses (disabled by default)
+- **PPE detection** — a YOLO detector locates each worker and their helmet / vest; a
+  missing item is flagged only after a sustained, time-confirmed violation, so
+  single-frame false pops are filtered out.
+- **Worker identification** — QR badge reading maps a tracked person to a worker ID/name,
+  cached across frames via a persistent tracker so identity survives movement.
+- **Zone monitoring** — polygon geofences raise a breach when an unauthorised worker
+  enters (disabled by default; enable in `config/settings.py`).
+- **Fall detection** — two-stage: the PPE detector supplies a person crop, a small
+  `fallen / standing` image classifier judges it, and a fall is reported only after the
+  `fallen` class is sustained for several frames on the same track.
+- **Alerts** — PPE, zone, and fall events POST to a backend. Identified workers send only
+  their ID; unidentified workers attach the frame for review. Each event type has its own
+  endpoint and is cooldown-gated so the backend isn't spammed.
+
+## Architecture
+
+```
+camera ─▶ PPEDetector ─┬─▶ WorkerIdentifier (QR)
+   │                   ├─▶ FallDetector (crop ─▶ classifier)
+   │                   ├─▶ ZoneMonitor
+   │                   └─▶ ComplianceTracker / ViolationConfirmer
+   ▼
+SafetyPipeline ─▶ FrameRenderer (display)
+               └▶ AlertClient ─▶ backend (HTTP)
+```
+
+Capture and detection run on separate threads: display stays smooth at camera FPS while
+inference runs as fast as the CPU allows, and the renderer holds the last known events
+when a frame momentarily has no detections.
+
+| Layer | Modules |
+|---|---|
+| Entry point | `src/main.py` |
+| Orchestration | `src/pipeline.py` |
+| Detection | `src/ppe_detector.py`, `src/fall_detector.py`, `src/wet_floor_detector.py` |
+| Identity / zones | `src/worker_id.py`, `src/zone_monitor.py`, `src/zone_client.py` |
+| Smoothing | `src/ppe_compliance_tracker.py`, `src/violation_confirmer.py` |
+| Output | `src/renderer.py`, `src/event_logger.py`, `src/alert_client.py` |
+| Config | `config/settings.py` |
 
 ## Setup
 
-### Requirements
-
-- Python 3.10+
-- OpenCV 4.8+
-- Webcam or video file
-
-### Install
+Requires **Python 3.10+**.
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env        # then edit .env with your values
 ```
 
 ### Models
 
-Place YOLO model weights in the `models/` directory:
+Model weights are not tracked in git. Place them in `models/`:
 
-- `models/best.pt` — PPE detection model (helmet, vest, person)
-- `models/fall_classifier/weights/best.pt` — Fall classification model (optional)
+- `models/best.pt` — PPE detector (helmet, vest, person)
+- `models/fall_cls.pt` — fall classifier (fallen, standing)
 
-### Video Source
+### Configuration
 
-Place your video in `data/sample_videos/` or update the source in `config/settings.py`.
+Secrets and deployment-specific values come from the environment (see `.env.example`);
+everything else lives in `config/settings.py`.
 
-**Live RTSP camera:** export `CAMERA_RTSP_URL` before launch — keeps credentials out of git.
+| Variable | Purpose | Default |
+|---|---|---|
+| `CAMERA_RTSP_URL` | Live RTSP stream — keeps credentials out of git | bundled sample video |
+| `BACKEND_URL` | Base URL; PPE & zone endpoints derive from it | `http://localhost:8080` |
+| `PPE_ALERTS_ENDPOINT` | Override the PPE alert URL | derived from `BACKEND_URL` |
+| `ZONES_ENDPOINT` | Override the zone upload URL | derived from `BACKEND_URL` |
 
-```bash
-export CAMERA_RTSP_URL='rtsp://user:password@192.168.1.32:554/1/1'
-python3 src/main.py
-```
-
-The camera layer auto-detects RTSP URLs and applies: TCP transport (via
-`OPENCV_FFMPEG_CAPTURE_OPTIONS`, set in `main.py`), `CAP_PROP_BUFFERSIZE=1`
-to stay at the live edge, and auto-reconnect if reads stall for more than
+The camera layer auto-detects RTSP URLs and applies TCP transport, a 1-frame buffer to
+stay at the live edge, and auto-reconnect if reads stall beyond
 `CameraConfig.reconnect_after_seconds`.
 
-## Usage
+## Run
 
-### Run the pipeline
+From the repository root:
 
 ```bash
-python3 src/main.py
+python3 -m src.main
 ```
 
-Press `q` to stop.
+Press `q` to stop. With no `CAMERA_RTSP_URL` set, it runs against the sample video.
 
-### Generate QR badges for workers
+### Generate QR badges
 
-Edit the `WORKERS` list in the script, then run:
+Edit the `WORKERS` list in the script, then:
 
 ```bash
 python3 scripts/generate_qr_badges.py
 ```
 
-QR codes encode JSON: `{"id": "W001", "name": "Alice"}`
+QR codes encode `{"id": "W001", "name": "Alice"}`; print from `data/qr_badges/` and attach
+to helmets or vests.
 
-Print the generated images from `data/qr_badges/` and attach to worker helmets or vests.
-
-### Run tests
-
-```bash
-python3 -m pytest tests/ -v
-```
-
-## Wet Floor Detection
-
-Disabled by default. Enabled by setting `WetFloorConfig.enabled = True` in
-`config/settings.py` **and** dropping a trained model at `models/wet_floor.pt`.
-Without both, the pipeline runs unchanged and the detector logs a single warning.
-
-### Extract training frames from a capture session
+## Tests
 
 ```bash
-python scripts/extract_wet_floor_frames.py \
-    --video data/wet_floor/raw_videos/session1.mp4 \
-    --output-dir data/wet_floor/frames_session1
+pytest
 ```
 
-Optional flags: `--sample-every N` (default 5), `--hash-threshold N` (default 4,
-perceptual-hash distance for dedup), `--prefix STR` (default `wf`).
-
-## Configuration
-
-All settings are in `config/settings.py`:
-
-| Config | Key fields |
-|--------|------------|
-| `CameraConfig` | `source`, `startup_delay` |
-| `PPEConfig` | `model_path`, `confidence`, `required_ppe`, `overlap_threshold` |
-| `FallDetectionConfig` | `classifier_model_path`, `confidence`, `enabled` |
-| `DisplayConfig` | `max_display_width`, `window_name` |
-| `AlertConfig` | `endpoint`, `enabled`, `cooldown_seconds` |
-| `WetFloorConfig` | `enabled`, `model_path`, `confidence_threshold`, `min_area_pct`, `consecutive_frames_required` |
-
-## Alert Payload
-
-When a PPE violation is detected, a POST request is sent to the configured endpoint:
-
-```json
-{
-  "userId": "W042",
-  "workerName": "John Doe",
-  "qrData": "{\"id\": \"W042\", \"name\": \"John Doe\"}",
-  "imgImage": "<base64 jpg>",
-  "missingItem": "vest",
-  "message": "Worker John Doe missing vest"
-}
-```
-
-## Project Structure
+## Repository layout
 
 ```
-├── config/
-│   └── settings.py          # All configuration dataclasses
-├── src/
-│   ├── main.py              # Entry point
-│   ├── pipeline.py          # Main pipeline orchestration
-│   ├── ppe_detector.py      # YOLO PPE detection
-│   ├── fall_detector.py     # YOLO fall classification
-│   ├── worker_id.py         # QR code worker identification
-│   ├── zone_monitor.py      # Geofence zone monitoring
-│   ├── alert_client.py      # HTTP alert client
-│   ├── event_logger.py      # Stderr event logging
-│   ├── renderer.py          # OpenCV frame rendering
-│   └── camera.py            # Threaded camera capture
-├── scripts/
-│   ├── generate_qr_badges.py
-│   ├── extract_crops.py
-│   ├── train_classifier.py
-│   └── test_alert.py
-├── tests/
-├── models/                  # YOLO weights (not tracked)
-├── data/                    # Videos, images (not tracked)
-├── requirements.txt
-└── pytest.ini
+config/   pipeline configuration and tracker settings
+src/       pipeline, detectors, alerting, rendering
+scripts/   dataset prep, training, and utility tools
+tests/     unit tests
+docs/      task spec and project notes
+data/      videos, frames, datasets (gitignored)
+models/    model weights (gitignored)
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

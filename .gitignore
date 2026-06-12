@@ -6,7 +6,18 @@ __pycache__/
 *.pt
 *.onnx
 *.engine
+*.bak
 models/
+
+# Archives & dataset bundles (never commit — pushed to Kaggle/Drive instead)
+*.zip
+*.tar
+*.tar.gz
+*.npz
+
+# Extracted dataset folders at repo root (local work artifacts)
+/Final Project-fine-tunning_dataset/
+/*_dataset/
 
 # Data (videos, images, crops). Use data/* (not data/) so we can re-include
 # the wet_floor scaffolding directories via .gitkeep markers below.

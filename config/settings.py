@@ -10,12 +10,23 @@ def _camera_source():
     return os.environ.get("CAMERA_RTSP_URL") or _DEFAULT_CAMERA_SOURCE
 
 
-_DEFAULT_ZONES_ENDPOINT = "http://203.0.113.10:8080/api/zones"
+# Backend base URL. The real deployment address is kept out of source — set
+# BACKEND_URL in your environment (.env). Defaults to localhost so a fresh
+# clone never points at, or leaks, a production server.
+_DEFAULT_BACKEND_URL = "http://localhost:8080"
+
+
+def _backend_base():
+    return (os.environ.get("BACKEND_URL") or _DEFAULT_BACKEND_URL).rstrip("/")
+
+
+def _ppe_endpoint():
+    return os.environ.get("PPE_ALERTS_ENDPOINT") or f"{_backend_base()}/api/ppe-alerts/create"
 
 
 def _zones_endpoint():
-    # ZONES_ENDPOINT lets deployments point zone uploads elsewhere without a code change.
-    return os.environ.get("ZONES_ENDPOINT") or _DEFAULT_ZONES_ENDPOINT
+    # ZONES_ENDPOINT overrides the derived URL for split deployments.
+    return os.environ.get("ZONES_ENDPOINT") or f"{_backend_base()}/api/zones"
 
 
 @dataclass
@@ -91,7 +102,7 @@ class DisplayConfig:
 
 @dataclass
 class AlertConfig:
-    endpoint: str = "http://203.0.113.10:8080/api/ppe-alerts/create"
+    endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
     cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
     # Zone / wet-floor / fall alerts POST a different payload shape; leave blank

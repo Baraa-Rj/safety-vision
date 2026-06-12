@@ -1,70 +1,125 @@
-from config.settings import FallDetectionConfig
+"""Tests for the classifier-based FallDetector gate logic.
+
+The detector localizes nothing itself: it takes the PPE detector's person boxes,
+crops each, and runs a fallen/standing classifier. A fall is reported only after
+the 'fallen' class is sustained for `consecutive_frames` on one track; the
+per-track cooldown then gates the `alert` flag. These tests exercise that gate
+with a mocked classifier, so no model file is required.
+"""
+from unittest.mock import patch
+
+import numpy as np
+import pytest
+
+import src.fall_detector as fd
 from src.fall_detector import FallDetector
+from config.settings import FallDetectionConfig
 
 
-def _det(**overrides):
+class _Probs:
+    def __init__(self, fallen_prob):
+        self.data = [fallen_prob, 1.0 - fallen_prob]
+        self.top1 = 0 if self.data[0] >= self.data[1] else 1
+
+
+class _Pred:
+    def __init__(self, fallen_prob):
+        self.probs = _Probs(fallen_prob)
+
+
+class _FakeModel:
+    """Stand-in for ultralytics.YOLO classify model."""
+    task = "classify"
+    names = {0: "fallen", 1: "standing"}
+
+    def __init__(self, *args, **kwargs):
+        self.fallen_prob = 0.0  # set per-frame by the test
+
+    def predict(self, crops, **kwargs):
+        return [_Pred(self.fallen_prob) for _ in crops]
+
+
+def _make(**overrides):
     cfg = FallDetectionConfig(**overrides)
-    # model_path points nowhere — posture/gate logic doesn't need the model.
-    return FallDetector("does_not_exist.pt", cfg)
+    with patch.object(fd, "YOLO", _FakeModel):
+        return FallDetector("ignored.pt", cfg)
 
 
-def _kpts(positions, conf=1.0):
-    """Build a 17x3 COCO keypoint list; only `positions` get confidence."""
-    k = [[0.0, 0.0, 0.0] for _ in range(17)]
-    for i, (x, y) in positions.items():
-        k[i] = [float(x), float(y), conf]
-    return k
+FRAME = np.zeros((200, 200, 3), dtype=np.uint8)
 
 
-# --- posture: torso angle ---
-
-def test_standing_is_not_fallen():
-    d = _det()
-    # shoulders above hips, same x -> vertical torso
-    kp = _kpts({5: (100, 100), 6: (120, 100), 11: (100, 200), 12: (120, 200)})
-    assert d._is_fallen_posture(kp) is False
+def _feed(det, prob, bbox=(0, 0, 100, 150), track_id=1):
+    det.model.fallen_prob = prob
+    return det.detect([{"person_bbox": bbox, "track_id": track_id}], FRAME)
 
 
-def test_lying_is_fallen():
-    d = _det()
-    # shoulders and hips at same height, far apart in x -> horizontal torso
-    kp = _kpts({5: (100, 150), 6: (110, 150), 11: (250, 155), 12: (260, 155)})
-    assert d._is_fallen_posture(kp) is True
+def test_rejects_non_classify_model():
+    class _DetModel(_FakeModel):
+        task = "detect"
+    with patch.object(fd, "YOLO", _DetModel):
+        with pytest.raises(ValueError):
+            FallDetector("ignored.pt", FallDetectionConfig())
 
 
-# --- posture: aspect-ratio fallback when torso keypoints missing ---
-
-def test_aspect_fallback_horizontal_is_fallen():
-    d = _det()
-    # no shoulders/hips; visible points spread wide, short vertically
-    kp = _kpts({0: (100, 100), 9: (200, 95), 15: (300, 110)})
-    assert d._is_fallen_posture(kp) is True
-
-
-def test_aspect_fallback_vertical_is_not_fallen():
-    d = _det()
-    kp = _kpts({0: (100, 100), 9: (105, 250), 15: (110, 400)})
-    assert d._is_fallen_posture(kp) is False
+def test_sustained_fallen_fires_after_consecutive_frames():
+    d = _make(consecutive_frames=3, fallen_conf=0.6, cooldown_seconds=100)
+    assert _feed(d, 0.9) == []          # streak 1
+    assert _feed(d, 0.9) == []          # streak 2
+    falls = _feed(d, 0.9)               # streak 3 -> fire
+    assert len(falls) == 1
+    assert falls[0]["alert"] is True
+    assert falls[0]["track_id"] == 1
+    assert falls[0]["confidence"] == pytest.approx(0.9)
 
 
-# --- temporal gate ---
-
-def test_tracked_needs_sustained_frames():
-    d = _det(consecutive_frames=5)
-    for _ in range(4):
-        assert d._confirm(track_id=1, is_fallen=True) is False
-    assert d._confirm(track_id=1, is_fallen=True) is True   # 5th consecutive
-
-
-def test_one_upright_frame_resets_gate():
-    d = _det(consecutive_frames=5)
-    for _ in range(5):
-        d._confirm(1, True)               # now confirmed
-    d._confirm(1, False)                   # a single upright frame
-    assert d._confirm(1, True) is False    # streak broken, not yet re-confirmed
+def test_cooldown_blocks_repeat_alert_then_reports_without_alert():
+    d = _make(consecutive_frames=2, fallen_conf=0.6, cooldown_seconds=100)
+    _feed(d, 0.9)
+    first = _feed(d, 0.9)
+    assert first[0]["alert"] is True
+    again = _feed(d, 0.9)               # still fallen, but within cooldown
+    assert len(again) == 1             # still reported (box stays up)
+    assert again[0]["alert"] is False  # but no second backend alert
 
 
-def test_untracked_bypasses_gate():
-    d = _det()
-    assert d._confirm(track_id=None, is_fallen=True) is True
-    assert d._confirm(track_id=None, is_fallen=False) is False
+def test_one_standing_frame_resets_the_streak():
+    d = _make(consecutive_frames=3, fallen_conf=0.6, cooldown_seconds=100)
+    _feed(d, 0.9)
+    _feed(d, 0.9)
+    assert _feed(d, 0.2) == []          # standing -> streak reset
+    assert _feed(d, 0.9) == []          # rebuild: streak 1
+    assert _feed(d, 0.9) == []          # streak 2
+    assert len(_feed(d, 0.9)) == 1      # streak 3 -> fire again
+
+
+def test_below_confidence_is_not_counted_as_fallen():
+    d = _make(consecutive_frames=2, fallen_conf=0.6, cooldown_seconds=100)
+    # top1 is 'fallen' but prob under threshold -> must not count
+    assert _feed(d, 0.55) == []
+    assert _feed(d, 0.55) == []
+
+
+def test_box_below_min_size_is_skipped():
+    d = _make(consecutive_frames=1, fallen_conf=0.6, min_size=40)
+    falls = _feed(d, 0.99, bbox=(0, 0, 30, 30))  # 30px < min_size
+    assert falls == []
+
+
+def test_untracked_person_still_gates_via_location_key():
+    d = _make(consecutive_frames=2, fallen_conf=0.6, cooldown_seconds=100)
+    assert _feed(d, 0.9, track_id=None) == []
+    falls = _feed(d, 0.9, track_id=None)
+    assert len(falls) == 1
+    assert falls[0]["track_id"] is None
+
+
+def test_cooldown_expires_and_alert_fires_again(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(fd.time, "time", lambda: clock[0])
+    d = _make(consecutive_frames=1, fallen_conf=0.6, cooldown_seconds=60)
+
+    assert _feed(d, 0.9)[0]["alert"] is True       # t=1000, alert
+    clock[0] = 1030.0
+    assert _feed(d, 0.9)[0]["alert"] is False      # within cooldown
+    clock[0] = 1070.0
+    assert _feed(d, 0.9)[0]["alert"] is True       # cooldown expired
