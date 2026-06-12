@@ -50,12 +50,21 @@ def main():
     ap.add_argument("--out", default="data/crops")
     ap.add_argument("--val-videos", type=int, default=1,
                     help="How many source videos per class to hold out for val")
+    ap.add_argument("--val-vids", default="",
+                    help="Comma list of video ids held out GLOBALLY for val "
+                         "(e.g. video5). Applied across all classes so no video "
+                         "spans train and val. Overrides --val-videos.")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-ratio", type=float, default=0.0,
+                    help="Cap TRAIN majority class at this multiple of the train "
+                         "minority class (e.g. 3 = 3:1). Val is left untouched so "
+                         "its class balance reflects reality. 0 = no capping.")
     args = ap.parse_args()
 
     import random
     rng = random.Random(args.seed)
 
+    forced_val = {v.strip() for v in args.val_vids.split(",") if v.strip()}
     plan = {}  # (split, cls) -> list of file paths
     for cls in CLASSES:
         by_vid = collect(args.src, cls)
@@ -65,14 +74,41 @@ def main():
                 f"class '{cls}' has crops from only {len(vids)} video(s) "
                 f"({vids}). Need >= 2 so one can be held out for val. Add crops "
                 f"from another scene for '{cls}'.")
-        rng.shuffle(vids)
-        n_val = min(args.val_videos, len(vids) - 1)   # keep >=1 video in train
-        val_vids = set(vids[:n_val])
+        if forced_val:
+            val_vids = forced_val & set(vids)
+            if not val_vids or val_vids == set(vids):
+                raise SystemExit(
+                    f"class '{cls}' videos {vids} vs val-vids {sorted(forced_val)}: "
+                    f"holdout must keep >=1 video on each side for every class.")
+        else:
+            rng.shuffle(vids)
+            n_val = min(args.val_videos, len(vids) - 1)   # keep >=1 video in train
+            val_vids = set(vids[:n_val])
         for v in vids:
             split = "val" if v in val_vids else "train"
             plan.setdefault((split, cls), []).extend(by_vid[v])
         print(f"{cls}: val videos={sorted(val_vids)}  train videos="
               f"{sorted(set(vids) - val_vids)}")
+
+    # Balance the TRAIN split only: cap the majority class at max_ratio x the
+    # minority, sampling per source video so scene variety (crouch/bend) is kept.
+    if args.max_ratio > 0:
+        train_counts = {c: len(plan.get(("train", c), [])) for c in CLASSES}
+        minority = min(train_counts.values())
+        cap = int(round(args.max_ratio * minority))
+        for cls in CLASSES:
+            files = plan.get(("train", cls), [])
+            if len(files) <= cap:
+                continue
+            by_vid = defaultdict(list)
+            for f in files:
+                by_vid[video_of(os.path.basename(f))].append(f)
+            keep = []
+            for v, fs in by_vid.items():                 # proportional per video
+                k = max(1, round(cap * len(fs) / len(files)))
+                keep.extend(rng.sample(fs, min(k, len(fs))))
+            plan[("train", cls)] = keep
+            print(f"train/{cls}: capped {len(files)} -> {len(keep)} (<= {cap})")
 
     for (split, cls), files in plan.items():
         dst = os.path.join(args.out, split, cls)

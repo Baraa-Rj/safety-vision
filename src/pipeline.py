@@ -90,9 +90,10 @@ class SafetyPipeline:
 
         if self.fall_detector:
             fall_results = self.fall_detector.detect(ppe_results, frame)
-            fall_indices = {f["person_index"] for f in fall_results}
+            fall_by_index = {f["person_index"]: f for f in fall_results}
         else:
-            fall_indices = set()
+            fall_by_index = {}
+        fall_indices = set(fall_by_index)
 
         for i, result in enumerate(ppe_results):
             x1, y1, x2, y2 = result["person_bbox"]
@@ -144,11 +145,14 @@ class SafetyPipeline:
             )
 
             if i in fall_indices:
+                fr = fall_by_index[i]
                 events["falls"].append({
                     "worker_id": worker_id,
                     "worker_name": worker_name,
                     "track_id": track_id,
                     "bbox": result["person_bbox"],
+                    "confidence": fr.get("confidence"),
+                    "alert": fr.get("alert", False),
                 })
             elif not result["compliant"]:
                 # Renderer reads ppe_violations for per-frame red boxes —
@@ -263,6 +267,11 @@ class SafetyPipeline:
                     self.alert_client.send_zone_alert(zone_event, frame)
                 for wf_event in events["wet_floor_events"]:
                     self.alert_client.send_wet_floor_alert(wf_event, frame)
+                # Fall alerts are already cooldown-gated in the detector; only the
+                # frame that flips `alert` True reaches the backend.
+                for fall in events["falls"]:
+                    if fall.get("alert"):
+                        self.alert_client.send_fall_alert(fall, frame)
 
             # Only update displayed events if we detected people,
             # otherwise keep showing previous results (avoids flickering

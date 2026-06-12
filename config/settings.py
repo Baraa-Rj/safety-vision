@@ -49,15 +49,16 @@ class PPEConfig:
 
 @dataclass
 class FallDetectionConfig:
-    # Pose-based detector (no trained fall model needed).
-    pose_model_path: str = "models/yolo26s-pose.pt"
-    person_conf: float = 0.40               # pose person-detection confidence
-    min_keypoint_conf: float = 0.30         # ignore keypoints below this
-    torso_angle_threshold: float = 50.0     # deg from vertical; >= this = lying
-    aspect_ratio_threshold: float = 1.2     # fallback: kp-box width/height >= this
-    consecutive_frames: int = 5             # sustained frames before flagging a fall
-    match_iou: float = 0.3                  # IoU to match a pose to a PPE person box
-    enabled: bool = False
+    # Classifier-based detector: each person crop (from the PPE detector) is run
+    # through a small fallen/standing image classifier. The detector localizes
+    # people; this judges each crop — matching how the model was trained.
+    model_path: str = "models/fall_cls.pt"
+    imgsz: int = 224                        # classifier input size (training imgsz)
+    fallen_conf: float = 0.60               # min 'fallen' prob to count a frame
+    consecutive_frames: int = 5             # sustained fallen frames before flagging
+    cooldown_seconds: float = 60.0          # per-track: one backend alert per event
+    min_size: int = 40                      # skip person boxes smaller than this (px)
+    enabled: bool = True
 
 
 @dataclass
@@ -93,10 +94,11 @@ class AlertConfig:
     endpoint: str = "http://203.0.113.10:8080/api/ppe-alerts/create"
     enabled: bool = True
     cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
-    # Zone / wet-floor alerts POST a different payload shape; leave blank to
-    # disable them so they never hit the PPE endpoint with the wrong body.
+    # Zone / wet-floor / fall alerts POST a different payload shape; leave blank
+    # to disable them so they never hit the PPE endpoint with the wrong body.
     zone_endpoint: str = ""
     wet_floor_endpoint: str = ""
+    fall_endpoint: str = ""
 
 
 @dataclass

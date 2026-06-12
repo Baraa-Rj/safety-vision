@@ -40,10 +40,10 @@ ppe_detector = PPEDetector(
     class_confidences=config.ppe.class_confidences,
     tracker_config=config.ppe.tracker_config,
 )
-# Pose-based fall detection. Enable with FallDetectionConfig.enabled = True
-# (uses models/yolo26s-pose.pt — no trained fall model required).
+# Classifier-based fall detection (models/fall_cls.pt: fallen/standing).
+# Toggle with FallDetectionConfig.enabled.
 fall_detector = (
-    FallDetector(config.fall.pose_model_path, config.fall)
+    FallDetector(config.fall.model_path, config.fall)
     if config.fall.enabled else None
 )
 
@@ -84,6 +84,7 @@ alert_client = AlertClient(
     cooldown_seconds=config.alert.cooldown_seconds,
     zone_endpoint=config.alert.zone_endpoint,
     wet_floor_endpoint=config.alert.wet_floor_endpoint,
+    fall_endpoint=config.alert.fall_endpoint,
 ) if config.alert.enabled else None
 
 pipeline = SafetyPipeline(

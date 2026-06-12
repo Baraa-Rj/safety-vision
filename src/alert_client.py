@@ -11,12 +11,13 @@ logger = logging.getLogger("safety_vision")
 
 class AlertClient:
     def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
-                 zone_endpoint="", wet_floor_endpoint=""):
+                 zone_endpoint="", wet_floor_endpoint="", fall_endpoint=""):
         self.endpoint = endpoint
         self.enabled = enabled
         self.cooldown_seconds = cooldown_seconds
         self.zone_endpoint = zone_endpoint
         self.wet_floor_endpoint = wet_floor_endpoint
+        self.fall_endpoint = fall_endpoint
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
 
@@ -143,6 +144,47 @@ class AlertClient:
             logger.info("[ZONE ALERT SENT] %s", message)
         except Exception as e:
             logger.error("[ZONE ALERT FAILED] %s", e)
+
+    def send_fall_alert(self, fall, frame):
+        # Detector already cooldown-gates falls (one per event per track), so no
+        # second cooldown here — just gate on config and an explicit endpoint.
+        if not self.enabled or not self.fall_endpoint:
+            return
+        self._executor.submit(self._post_fall_alert, fall, frame)
+
+    def _post_fall_alert(self, fall, frame):
+        try:
+            worker_id = fall.get("worker_id")
+            worker_name = fall.get("worker_name")
+
+            if worker_name:
+                message = f"Worker {worker_name} has fallen"
+            elif worker_id:
+                message = f"Worker {worker_id} has fallen"
+            else:
+                message = "Unknown worker has fallen"
+
+            payload = {
+                "event_type": "fall",
+                "message": message,
+            }
+            if fall.get("confidence") is not None:
+                payload["confidence"] = float(fall["confidence"])
+            if worker_id is not None:
+                # Identified worker: backend knows who they are — skip the frame.
+                payload["userId"] = str(worker_id)
+            else:
+                # Unidentified worker: attach the frame for manual review.
+                _, buffer = cv2.imencode(".jpg", frame)
+                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
+            if worker_name is not None:
+                payload["workerName"] = worker_name
+
+            response = requests.post(self.fall_endpoint, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("[FALL ALERT SENT] %s", message)
+        except Exception as e:
+            logger.error("[FALL ALERT FAILED] %s", e)
 
     def _post_alert(self, violation, frame):
         try:
