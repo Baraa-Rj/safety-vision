@@ -28,7 +28,9 @@ class FrameRenderer:
         for fall_event in events["falls"]:
             x1, y1, x2, y2 = fall_event["bbox"]
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            cv2.putText(display, "FALL DETECTED", (x1, y1 - 10),
+            severity = fall_event.get("severity") or ""
+            label = f"FALL DETECTED [{severity}]" if severity else "FALL DETECTED"
+            cv2.putText(display, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 3)
 
         for zone_event in events["zone_breaches"]:

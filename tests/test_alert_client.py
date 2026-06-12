@@ -49,3 +49,55 @@ def test_disabled_client_sends_nothing():
     c.enabled = False
     c.send_ppe_alert(_violation(), FRAME)
     assert sent == []
+
+
+# --- fall alerts ---
+
+def _capture_post(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+
+        class _R:
+            def raise_for_status(self):
+                pass
+
+        return _R()
+
+    monkeypatch.setattr("src.alert_client.requests.post", fake_post)
+    return captured
+
+
+def test_fall_alert_payload_shape_identified(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    fall_endpoint="http://x/api/fall-alerts/create")
+    c._post_fall_alert(
+        {"worker_id": "W42", "worker_name": None, "severity": "HIGH"}, FRAME)
+
+    p = captured["json"]
+    assert set(p.keys()) == {"userId", "severity", "imgImage", "message"}
+    assert p["userId"] == "W42"
+    assert p["severity"] == "HIGH"
+    assert p["imgImage"]                      # frame always attached
+    assert "HIGH" in p["message"]
+    assert captured["url"] == "http://x/api/fall-alerts/create"
+
+
+def test_fall_alert_unidentified_has_empty_userid_but_keeps_image(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    fall_endpoint="http://x/api/fall-alerts/create")
+    c._post_fall_alert({"worker_id": None, "severity": "LOW"}, FRAME)
+
+    p = captured["json"]
+    assert p["userId"] == ""
+    assert p["imgImage"]
+
+
+def test_send_fall_alert_noop_without_endpoint():
+    c, sent = _client()                       # no fall_endpoint configured
+    c.send_fall_alert({"severity": "LOW", "alert": True}, FRAME)
+    assert sent == []

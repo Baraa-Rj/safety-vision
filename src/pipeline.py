@@ -94,12 +94,17 @@ class SafetyPipeline:
         if self.fall_detector:
             fallen_dets = getattr(self.ppe_detector, "fallen_detections", [])
             for fr in self.fall_detector.detect(fallen_dets):
+                # Best-effort identity: reuse the ID this track was scanned with
+                # while upright (their QR can't be read on the ground).
+                identity = self.worker_id.get_cached(fr.get("track_id"))
                 events["falls"].append({
-                    "worker_id": None,
-                    "worker_name": None,
+                    "worker_id": identity["worker_id"] if identity else None,
+                    "worker_name": identity["worker_name"] if identity else None,
                     "track_id": fr.get("track_id"),
                     "bbox": fr["bbox"],
                     "confidence": fr.get("confidence"),
+                    "severity": fr.get("severity"),
+                    "still_seconds": fr.get("still_seconds"),
                     "alert": fr.get("alert", False),
                 })
 

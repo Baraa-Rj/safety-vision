@@ -156,29 +156,20 @@ class AlertClient:
         try:
             worker_id = fall.get("worker_id")
             worker_name = fall.get("worker_name")
+            severity = fall.get("severity") or "LOW"
 
-            if worker_name:
-                message = f"Worker {worker_name} has fallen"
-            elif worker_id:
-                message = f"Worker {worker_id} has fallen"
-            else:
-                message = "Unknown worker has fallen"
+            who = worker_name or worker_id or "Unknown worker"
+            message = f"{who} has fallen ({severity})"
 
+            # Falls always carry the frame regardless of identity — responders
+            # need to see the scene to gauge the situation.
+            _, buffer = cv2.imencode(".jpg", frame)
             payload = {
-                "event_type": "fall",
+                "userId": str(worker_id) if worker_id is not None else "",
+                "severity": severity,
+                "imgImage": base64.b64encode(buffer).decode("utf-8"),
                 "message": message,
             }
-            if fall.get("confidence") is not None:
-                payload["confidence"] = float(fall["confidence"])
-            if worker_id is not None:
-                # Identified worker: backend knows who they are — skip the frame.
-                payload["userId"] = str(worker_id)
-            else:
-                # Unidentified worker: attach the frame for manual review.
-                _, buffer = cv2.imencode(".jpg", frame)
-                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
-            if worker_name is not None:
-                payload["workerName"] = worker_name
 
             response = requests.post(self.fall_endpoint, json=payload, timeout=10)
             response.raise_for_status()

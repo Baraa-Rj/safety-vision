@@ -29,6 +29,10 @@ def _zones_endpoint():
     return os.environ.get("ZONES_ENDPOINT") or f"{_backend_base()}/api/zones"
 
 
+def _fall_endpoint():
+    return os.environ.get("FALL_ALERTS_ENDPOINT") or f"{_backend_base()}/api/fall-alerts/create"
+
+
 @dataclass
 class CameraConfig:
     source: str = field(default_factory=_camera_source)
@@ -66,11 +70,20 @@ class FallDetectionConfig:
     # temporal gate over those detections — no separate model or crop step.
     fallen_conf: float = 0.40               # min detection confidence for a fallen box
     consecutive_frames: int = 5             # sustained fallen frames before flagging
-    cooldown_seconds: float = 60.0          # per-track: one backend alert per event
     min_size: int = 40                      # skip fallen boxes smaller than this (px)
     # A fallen person lies horizontal: real fallen boxes are wider than tall
     # (measured h/w <= ~0.9). Reject tall/narrow boxes as false positives.
     max_aspect_ratio: float = 1.5           # drop fallen box if height/width exceeds this
+    # Severity (triage priority) thresholds. Severity escalates the longer a
+    # worker stays down and the stiller they are; a backend alert is sent on the
+    # first confirmation and again each time the tier rises (LOW->MEDIUM->HIGH).
+    still_motion_px: int = 15               # centroid move below this = "still"
+    medium_seconds: float = 5.0             # on the ground this long -> MEDIUM
+    high_still_seconds: float = 20.0        # motionless this long -> HIGH (urgent)
+    # No fallen detection for this long ends the event (worker recovered). Longer
+    # than the streak gap so a brief detector dropout doesn't reset the severity
+    # clock — a motionless worker still escalates through flicker.
+    recovery_seconds: float = 3.0
     enabled: bool = True
 
 
@@ -107,11 +120,12 @@ class AlertConfig:
     endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
     cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
-    # Zone / wet-floor / fall alerts POST a different payload shape; leave blank
-    # to disable them so they never hit the PPE endpoint with the wrong body.
+    # Zone / wet-floor alerts POST a different payload shape; leave blank to
+    # disable them so they never hit the PPE endpoint with the wrong body.
     zone_endpoint: str = ""
     wet_floor_endpoint: str = ""
-    fall_endpoint: str = ""
+    # Falls have a dedicated endpoint + payload, so this is derived (not blank).
+    fall_endpoint: str = field(default_factory=_fall_endpoint)
 
 
 @dataclass

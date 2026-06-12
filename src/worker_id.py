@@ -79,6 +79,19 @@ class WorkerIdentifier:
 
         return result
 
+    def get_cached(self, track_id):
+        """Return a track's cached identity (no crop/decode), or None.
+
+        Lets a fallen worker keep the ID they were scanned with while upright,
+        even though their QR can't be read on the ground.
+        """
+        if track_id is None:
+            return None
+        cached = self._cache.get(track_id)
+        if cached is not None and (time.time() - cached["timestamp"]) < self._cache_ttl:
+            return cached["result"]
+        return None
+
     def clear_stale(self, active_track_ids):
         stale = set(self._cache.keys()) - set(active_track_ids)
         for tid in stale:
