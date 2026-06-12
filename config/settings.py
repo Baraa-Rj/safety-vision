@@ -49,6 +49,7 @@ class PPEConfig:
         "vest": 0.20,
         "helmet": 0.35,
         "person": 0.35,
+        "fallen": 0.40,
     })
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
@@ -60,15 +61,13 @@ class PPEConfig:
 
 @dataclass
 class FallDetectionConfig:
-    # Classifier-based detector: each person crop (from the PPE detector) is run
-    # through a small fallen/standing image classifier. The detector localizes
-    # people; this judges each crop — matching how the model was trained.
-    model_path: str = "models/fall_cls.pt"
-    imgsz: int = 224                        # classifier input size (training imgsz)
-    fallen_conf: float = 0.60               # min 'fallen' prob to count a frame
+    # Detection-based: best.pt has a dedicated 'fallen' class, so a worker on the
+    # ground is detected directly (see PPEConfig.model_path). This is just the
+    # temporal gate over those detections — no separate model or crop step.
+    fallen_conf: float = 0.40               # min detection confidence for a fallen box
     consecutive_frames: int = 5             # sustained fallen frames before flagging
     cooldown_seconds: float = 60.0          # per-track: one backend alert per event
-    min_size: int = 40                      # skip person boxes smaller than this (px)
+    min_size: int = 40                      # skip fallen boxes smaller than this (px)
     enabled: bool = True
 
 

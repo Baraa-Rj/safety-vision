@@ -123,7 +123,7 @@ def test_zone_breach_in_pipeline(dummy_frame):
             pass
 
     class StubFallDetector:
-        def detect(self, person_bboxes, frame):
+        def detect(self, fallen_detections):
             return []
 
     class StubCamera:

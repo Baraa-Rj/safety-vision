@@ -88,12 +88,20 @@ class SafetyPipeline:
 
         ppe_results = self.ppe_detector.detect(frame)
 
+        # Falls come straight from best.pt's 'fallen' class (surfaced by the PPE
+        # detector), so they're independent of the upright-person boxes — a worker
+        # on the ground no longer needs a 'person' box to be flagged.
         if self.fall_detector:
-            fall_results = self.fall_detector.detect(ppe_results, frame)
-            fall_by_index = {f["person_index"]: f for f in fall_results}
-        else:
-            fall_by_index = {}
-        fall_indices = set(fall_by_index)
+            fallen_dets = getattr(self.ppe_detector, "fallen_detections", [])
+            for fr in self.fall_detector.detect(fallen_dets):
+                events["falls"].append({
+                    "worker_id": None,
+                    "worker_name": None,
+                    "track_id": fr.get("track_id"),
+                    "bbox": fr["bbox"],
+                    "confidence": fr.get("confidence"),
+                    "alert": fr.get("alert", False),
+                })
 
         for i, result in enumerate(ppe_results):
             x1, y1, x2, y2 = result["person_bbox"]
@@ -134,7 +142,7 @@ class SafetyPipeline:
 
             # Feed the time-based confirmer every frame (compliant resets the
             # streak). Key by the most stable identity we have.
-            is_violation = (i not in fall_indices) and (not result["compliant"])
+            is_violation = not result["compliant"]
             conf_key = (
                 worker_id if worker_id is not None
                 else f"track_{track_id}" if track_id is not None
@@ -144,17 +152,7 @@ class SafetyPipeline:
                 conf_key, is_violation, events["timestamp"],
             )
 
-            if i in fall_indices:
-                fr = fall_by_index[i]
-                events["falls"].append({
-                    "worker_id": worker_id,
-                    "worker_name": worker_name,
-                    "track_id": track_id,
-                    "bbox": result["person_bbox"],
-                    "confidence": fr.get("confidence"),
-                    "alert": fr.get("alert", False),
-                })
-            elif not result["compliant"]:
+            if not result["compliant"]:
                 # Renderer reads ppe_violations for per-frame red boxes —
                 # keep it instantaneous so visuals don't lag confirmation.
                 events["ppe_violations"].append({

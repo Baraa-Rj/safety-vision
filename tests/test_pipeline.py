@@ -21,7 +21,7 @@ class StubPPEDetector:
 
 
 class StubFallDetector:
-    def detect(self, person_bboxes, frame):
+    def detect(self, fallen_detections):
         return []
 
 

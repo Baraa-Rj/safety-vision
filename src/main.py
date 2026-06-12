@@ -40,12 +40,9 @@ ppe_detector = PPEDetector(
     class_confidences=config.ppe.class_confidences,
     tracker_config=config.ppe.tracker_config,
 )
-# Classifier-based fall detection (models/fall_cls.pt: fallen/standing).
-# Toggle with FallDetectionConfig.enabled.
-fall_detector = (
-    FallDetector(config.fall.model_path, config.fall)
-    if config.fall.enabled else None
-)
+# Detection-based fall detection: gates the 'fallen' class emitted by the PPE
+# detector (models/best.pt). Toggle with FallDetectionConfig.enabled.
+fall_detector = FallDetector(config.fall) if config.fall.enabled else None
 
 # Wet floor detection: enable by setting WetFloorConfig.enabled = True
 # AND providing models/wet_floor.pt. The detector is constructed unconditionally

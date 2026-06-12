@@ -16,6 +16,10 @@ class PPEDetector:
         self.overlap_threshold = overlap_threshold
         self.tracker_config = tracker_config
         self.person_class = "person"
+        self.fallen_class = "fallen"
+        # Latest 'fallen' detections, refreshed each detect(). The FallDetector
+        # reads these so best.pt runs only once per frame.
+        self.fallen_detections = []
 
         # YOLO drops boxes below `conf` before they reach us, so run inference
         # at the floor of all per-class thresholds and filter in Python below.
@@ -36,6 +40,7 @@ class PPEDetector:
 
         persons = []
         ppe_items = []
+        fallen = []
 
         for box in detections.boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
@@ -57,8 +62,26 @@ class PPEDetector:
 
             if cls_name == self.person_class:
                 persons.append(detection)
+            elif cls_name == self.fallen_class:
+                fallen.append(detection)
             elif cls_name in self.required_ppe:
                 ppe_items.append(detection)
+
+        # A worker on the ground is detected as 'fallen'. If the model also emits
+        # an overlapping 'person' box for the same body, drop it so the fall isn't
+        # double-counted as a standing PPE subject.
+        if fallen:
+            persons = [
+                p for p in persons
+                if not any(self._has_sufficient_overlap(p["bbox"], f["bbox"])
+                           for f in fallen)
+            ]
+
+        self.fallen_detections = [
+            {"bbox": f["bbox"], "track_id": f.get("track_id"),
+             "confidence": f["confidence"]}
+            for f in fallen
+        ]
 
         results_list = []
         for person in persons:
