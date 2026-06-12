@@ -68,6 +68,9 @@ class FallDetectionConfig:
     consecutive_frames: int = 5             # sustained fallen frames before flagging
     cooldown_seconds: float = 60.0          # per-track: one backend alert per event
     min_size: int = 40                      # skip fallen boxes smaller than this (px)
+    # A fallen person lies horizontal: real fallen boxes are wider than tall
+    # (measured h/w <= ~0.9). Reject tall/narrow boxes as false positives.
+    max_aspect_ratio: float = 1.5           # drop fallen box if height/width exceeds this
     enabled: bool = True
 
 

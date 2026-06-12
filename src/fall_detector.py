@@ -27,6 +27,7 @@ class FallDetector:
         self.consecutive = config.consecutive_frames
         self.cooldown_s = config.cooldown_seconds
         self.min_size = config.min_size
+        self.max_aspect_ratio = config.max_aspect_ratio
         self._streak = {}            # key -> consecutive fallen frames (capped)
         self._cooldown_until = {}    # key -> ts until which no new alert fires
         self._last_seen = {}         # key -> ts (gap detection + pruning)
@@ -42,9 +43,13 @@ class FallDetector:
         falls = []
         for d in fallen_detections:
             x1, y1, x2, y2 = d["bbox"]
-            if (x2 - x1) < self.min_size or (y2 - y1) < self.min_size:
+            w, h = x2 - x1, y2 - y1
+            if w < self.min_size or h < self.min_size:
                 continue
             if d.get("confidence", 1.0) < self.fallen_conf:
+                continue
+            # A fallen body is horizontal; reject implausibly tall/narrow boxes.
+            if w > 0 and h / w > self.max_aspect_ratio:
                 continue
 
             tid = d.get("track_id")
