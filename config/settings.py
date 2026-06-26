@@ -50,13 +50,17 @@ class PPEConfig:
     # drop low-confidence vests before we filter; each detection is then gated by
     # its own class threshold.
     class_confidences: dict = field(default_factory=lambda: {
-        "vest": 0.20,
+        "vest": 0.35,
         "helmet": 0.35,
         "person": 0.35,
         "fallen": 0.40,
     })
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
+    # Inference resolution. 640 (YOLO's native) resolves small/distant PPE and
+    # partially-occluded vests far better than 480; the cost is ~1.8x slower
+    # inference, acceptable on the process_every_n cadence.
+    imgsz: int = 640
     process_every_n: int = 3
     # Custom BoT-SORT config: larger track_buffer + ReID so a worker keeps the
     # same track_id (and thus their cached QR identity) across movement.
@@ -93,9 +97,14 @@ class FallDetectionConfig:
 
 @dataclass
 class ComplianceConfig:
-    window_size: int = 15
-    missing_to_alert: int = 10
-    present_to_clear: int = 3
+    # On-screen red appears once an item is missing in missing_to_alert of the
+    # last window_size processed frames (the window must fill first). Tuned to
+    # flag a real violation in ~1s while ignoring single-frame detection flicker:
+    # a true violator is missing ~all frames, a compliant worker only a few.
+    # Smaller window / lower ratio = faster red but twitchier.
+    window_size: int = 8
+    missing_to_alert: int = 5
+    present_to_clear: int = 2
     track_timeout_seconds: float = 5.0
     uncertain_lower: float = 0.25
     uncertain_upper: float = 0.40
@@ -106,10 +115,10 @@ class ComplianceConfig:
 
 @dataclass
 class WetFloorConfig:
-    enabled: bool = False                       # off until model exists
+    enabled: bool = True                        # wet_floor.pt trained (YOLO26-seg, single class)
     model_path: str = "models/wet_floor.pt"
     confidence_threshold: float = 0.5
-    min_area_pct: float = 1.0                   # ignore boxes <1% of frame
+    min_area_pct: float = 0.25                  # ignore boxes <0.25% of frame (real papers run 0.4-1.4%)
     consecutive_frames_required: int = 5        # temporal smoothing
 
 

@@ -5,7 +5,7 @@ from ultralytics import YOLO
 class PPEDetector:
     def __init__(self, model_path, confidence=0.35, required_ppe=None,
                  overlap_threshold=0.5, class_confidences=None,
-                 tracker_config="botsort.yaml"):
+                 tracker_config="botsort.yaml", imgsz=640):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.use_half = self.device != "cpu"
         self.model = YOLO(model_path)
@@ -15,6 +15,7 @@ class PPEDetector:
         self.required_ppe = required_ppe or {"helmet", "vest"}
         self.overlap_threshold = overlap_threshold
         self.tracker_config = tracker_config
+        self.imgsz = imgsz
         self.person_class = "person"
         self.fallen_class = "fallen"
         # Latest 'fallen' detections, refreshed each detect(). The FallDetector
@@ -34,7 +35,7 @@ class PPEDetector:
     def detect(self, frame):
         detections = self.model.track(
             frame, conf=self._inference_conf, verbose=False,
-            imgsz=480, persist=True, half=self.use_half,
+            imgsz=self.imgsz, persist=True, half=self.use_half,
             tracker=self.tracker_config,
         )[0]
 
@@ -83,13 +84,28 @@ class PPEDetector:
             for f in fallen
         ]
 
+        # Credit each PPE item to a single worker — the one it overlaps most —
+        # rather than to every person whose box it clips. Without this, a vest
+        # sitting between two adjacent workers (or a held vest near a neighbour)
+        # marks both compliant ("vest bleed"). The item must also sit in the body
+        # region where that PPE is worn (helmet on the head, vest on the torso),
+        # which rejects held/floor items and cross-body bleed.
+        detected_by_person = {id(p): set() for p in persons}
+        for ppe in ppe_items:
+            best_person = None
+            best_ratio = self.overlap_threshold
+            for person in persons:
+                ratio = self._overlap_ratio(ppe["bbox"], person["bbox"])
+                if ratio >= best_ratio and self._in_expected_region(
+                        ppe["class_name"], ppe["bbox"], person["bbox"]):
+                    best_ratio = ratio
+                    best_person = person
+            if best_person is not None:
+                detected_by_person[id(best_person)].add(ppe["class_name"])
+
         results_list = []
         for person in persons:
-            detected_ppe = set()
-            for ppe in ppe_items:
-                if self._has_sufficient_overlap(ppe["bbox"], person["bbox"]):
-                    detected_ppe.add(ppe["class_name"])
-
+            detected_ppe = detected_by_person[id(person)]
             missing_ppe = self.required_ppe - detected_ppe
 
             results_list.append({
@@ -102,7 +118,28 @@ class PPEDetector:
 
         return results_list
 
-    def _has_sufficient_overlap(self, inner_box, outer_box):
+    def _in_expected_region(self, cls_name, ppe_box, person_box):
+        # Gate a PPE item by where on the body it is worn, using the vertical
+        # position of the item's centre within the person box. A helmet belongs
+        # on the head (top of the box); a vest on the torso. This rejects a vest
+        # held at the waist of a neighbour or lying on the floor at someone's feet.
+        py1 = person_box[1]
+        py2 = person_box[3]
+        height = py2 - py1
+        if height <= 0:
+            return False
+
+        center_y = (ppe_box[1] + ppe_box[3]) / 2.0
+        frac = (center_y - py1) / height  # 0 = head, 1 = feet
+
+        if cls_name == "helmet":
+            return frac <= 0.45
+        if cls_name == "vest":
+            return 0.15 <= frac <= 0.80
+        return True
+
+    def _overlap_ratio(self, inner_box, outer_box):
+        # Fraction of inner_box's area that falls inside outer_box (0..1).
         ix1, iy1, ix2, iy2 = inner_box
         ox1, oy1, ox2, oy2 = outer_box
 
@@ -112,13 +149,15 @@ class PPEDetector:
         inter_y2 = min(iy2, oy2)
 
         if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
-            return False
+            return 0.0
 
         inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
         inner_area = (ix2 - ix1) * (iy2 - iy1)
 
         if inner_area == 0:
-            return False
+            return 0.0
 
-        overlap_ratio = inter_area / inner_area
-        return overlap_ratio >= self.overlap_threshold
+        return inter_area / inner_area
+
+    def _has_sufficient_overlap(self, inner_box, outer_box):
+        return self._overlap_ratio(inner_box, outer_box) >= self.overlap_threshold

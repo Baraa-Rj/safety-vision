@@ -39,6 +39,7 @@ ppe_detector = PPEDetector(
     overlap_threshold=config.ppe.overlap_threshold,
     class_confidences=config.ppe.class_confidences,
     tracker_config=config.ppe.tracker_config,
+    imgsz=config.ppe.imgsz,
 )
 # Detection-based fall detection: gates the 'fallen' class emitted by the PPE
 # detector (models/best.pt). Toggle with FallDetectionConfig.enabled.

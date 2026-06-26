@@ -33,6 +33,12 @@ class FrameRenderer:
             cv2.putText(display, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 3)
 
+        for wf in events.get("wet_floor_events", []):
+            x1, y1, x2, y2 = wf["bbox"]
+            cv2.rectangle(display, (x1, y1), (x2, y2), (255, 255, 0), 3)  # cyan = wet floor
+            cv2.putText(display, "WET FLOOR", (x1, max(y1 - 10, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
         for zone_event in events["zone_breaches"]:
             x1, y1, x2, y2 = zone_event["bbox"]
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 165, 255), 2)

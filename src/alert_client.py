@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +8,16 @@ import cv2
 import requests
 
 logger = logging.getLogger("safety_vision")
+
+
+def _log_outgoing(url, payload):
+    """Print the request we're about to send, with the base64 image shortened
+    so the terminal stays readable."""
+    shown = dict(payload)
+    img = shown.get("imgImage")
+    if isinstance(img, str):
+        shown["imgImage"] = f"<base64 jpg, {len(img)} chars>"
+    logger.info("[POST %s] %s", url, json.dumps(shown))
 
 
 class AlertClient:
@@ -83,6 +94,7 @@ class AlertClient:
                 "message": "Wet floor detected",
             }
 
+            _log_outgoing(self.wet_floor_endpoint, payload)
             response = requests.post(self.wet_floor_endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[WET FLOOR ALERT SENT] bbox=%s", wf_event["bbox"])
@@ -141,6 +153,7 @@ class AlertClient:
             if worker_name is not None:
                 payload["workerName"] = worker_name
 
+            _log_outgoing(self.zone_endpoint, payload)
             response = requests.post(self.zone_endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[ZONE ALERT SENT] %s", message)
@@ -183,6 +196,7 @@ class AlertClient:
                 "message": message,
             }
 
+            _log_outgoing(self.fall_endpoint, payload)
             response = requests.post(self.fall_endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[FALL ALERT SENT] %s", message)
@@ -213,6 +227,7 @@ class AlertClient:
                 _, buffer = cv2.imencode(".jpg", frame)
                 payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
 
+            _log_outgoing(self.endpoint, payload)
             response = requests.post(self.endpoint, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("[ALERT SENT] %s", message)

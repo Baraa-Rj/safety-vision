@@ -1,0 +1,11 @@
+Ultralytics 8.4.33 🚀 Python-3.10.12 torch-2.11.0+cu130 CPU (11th Gen Intel Core i7-1165G7 @ 2.80GHz)
+YOLO26s summary (fused): 122 layers, 9,466,728 parameters, 0 gradients, 20.5 GFLOPs
+[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 468.7±90.7 MB/s, size: 761.9 KB)
+[K[34m[1mval: [0mScanning /tmp/ppe4/test/labels.cache... 18 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 18/18 4.7Mit/s 0.0s
+[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 50% ━━━━━━────── 1/2 6.8s/it 2.0s<6.8s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 2/2 1.1s/it 2.3s
+                   all         18        121      0.994      0.979      0.991      0.962
+                helmet         17         32          1      0.996      0.995      0.954
+                person         18         49          1      0.943      0.982      0.953
+                  vest         18         40      0.983          1      0.995       0.98
+Speed: 0.7ms preprocess, 97.8ms inference, 0.0ms loss, 0.5ms postprocess per image
+💡 Learn more at https://docs.ultralytics.com/modes/val

@@ -1,0 +1,6 @@
+path: /tmp/ppe4
+train: valid/images
+val: valid/images
+test: test/images
+nc: 4
+names: ['fallen','helmet','person','vest']

@@ -157,10 +157,47 @@ class SafetyPipeline:
                 conf_key, is_violation, events["timestamp"],
             )
 
-            if not result["compliant"]:
-                # Renderer reads ppe_violations for per-frame red boxes —
-                # keep it instantaneous so visuals don't lag confirmation.
+            # On-screen red/green uses the SMOOTHED per-track verdict, not the raw
+            # frame. best.pt's vest/helmet detection flickers at this camera's
+            # distance, and a single dropped frame must not flip a compliant
+            # worker to red. PPEComplianceTracker only marks an item `alerted`
+            # after it's missing in missing_to_alert/window_size frames, and clears
+            # with hysteresis — so brief dropouts stay green. With no track to
+            # smooth on, fall back to the raw frame.
+            if track_id is not None:
+                alerted = sorted(
+                    item for item, on
+                    in self.compliance_tracker.get_state(track_id).items() if on
+                )
+                display_violation = bool(alerted)
+                display_missing = alerted or result["missing_ppe"]
+            else:
+                display_violation = not result["compliant"]
+                display_missing = result["missing_ppe"]
+
+            if display_violation:
                 events["ppe_violations"].append({
+                    "worker_id": worker_id,
+                    "worker_name": worker_name,
+                    "qr_data": qr_data,
+                    "track_id": track_id,
+                    "bbox": result["person_bbox"],
+                    "missing": display_missing,
+                    "detected": result["detected_ppe"],
+                    "zone": zone,
+                })
+            else:
+                events["compliant_workers"].append({
+                    "worker_id": worker_id,
+                    "worker_name": worker_name,
+                    "track_id": track_id,
+                    "bbox": result["person_bbox"],
+                })
+
+            # Backend alert: sustained, time-confirmed violation — separate from
+            # the on-screen state, using the raw signal + confirm_seconds gate.
+            if is_violation and confirmed:
+                events["confirmed_ppe_violations"].append({
                     "worker_id": worker_id,
                     "worker_name": worker_name,
                     "qr_data": qr_data,
@@ -169,27 +206,6 @@ class SafetyPipeline:
                     "missing": result["missing_ppe"],
                     "detected": result["detected_ppe"],
                     "zone": zone,
-                })
-
-                # Confirm for the backend only after a constant, sustained
-                # violation — this is what stops single-frame false alerts.
-                if confirmed:
-                    events["confirmed_ppe_violations"].append({
-                        "worker_id": worker_id,
-                        "worker_name": worker_name,
-                        "qr_data": qr_data,
-                        "track_id": track_id,
-                        "bbox": result["person_bbox"],
-                        "missing": result["missing_ppe"],
-                        "detected": result["detected_ppe"],
-                        "zone": zone,
-                    })
-            else:
-                events["compliant_workers"].append({
-                    "worker_id": worker_id,
-                    "worker_name": worker_name,
-                    "track_id": track_id,
-                    "bbox": result["person_bbox"],
                 })
 
             if zone is not None and not self.zone_monitor.is_permitted(zone, worker_id):
