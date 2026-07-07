@@ -37,3 +37,38 @@ def test_empty_crop_returns_none(identifier):
 
 def test_none_crop_returns_none(identifier):
     assert identifier.identify(None) is None
+
+
+# --- identity persistence ---
+
+UUID = "0cb43da1-eb90-4d5d-bae9-c4020a729030"
+
+
+def test_identity_survives_absence_from_active_set(identifier):
+    """A missed detection drops the track from one frame's active set — the
+    identity must survive that (the old clear_stale deleted it instantly)."""
+    identifier.identify(_generate_qr(UUID), track_id=5)
+    for _ in range(10):
+        identifier.clear_stale(active_track_ids=[])
+    assert identifier.get_cached(5)["worker_id"] == UUID
+
+
+def test_identity_pruned_after_ttl():
+    identifier = WorkerIdentifier(cache_ttl=10.0)
+    identifier.identify(_generate_qr(UUID), track_id=5)
+    identifier._cache[5]["timestamp"] -= 11.0    # absent longer than the TTL
+    identifier.clear_stale(active_track_ids=[])
+    assert identifier.get_cached(5) is None
+
+
+def test_transfer_moves_identity_to_new_track(identifier):
+    identifier.identify(_generate_qr(UUID), track_id=5)
+    moved = identifier.transfer(5, 9)
+    assert moved["worker_id"] == UUID
+    assert identifier.get_cached(9)["worker_id"] == UUID
+    assert identifier.get_cached(5) is None      # old id no longer resolves
+
+
+def test_transfer_without_cached_identity_is_noop(identifier):
+    assert identifier.transfer(123, 456) is None
+    assert identifier.get_cached(456) is None

@@ -3,7 +3,14 @@ import time
 
 
 class WorkerIdentifier:
-    def __init__(self, cache_ttl=30.0, max_failed_attempts=450, min_decode_size=400):
+    # cache_ttl is the identity's survival window while its track is NOT being
+    # seen (occlusion, detection dropout, worker briefly off-frame). While the
+    # track is visible every identify() hit refreshes the timestamp, so a
+    # present worker never expires. Generous by design: BoT-SORT never reuses
+    # a track id within a run, so a lingering identity can't attach to the
+    # wrong person — it's only re-adopted via the same id resurfacing or an
+    # explicit continuity transfer().
+    def __init__(self, cache_ttl=300.0, max_failed_attempts=450, min_decode_size=400):
         self.detector = cv2.QRCodeDetector()
         self._cache = {}
         self._fail_count = {}
@@ -92,8 +99,42 @@ class WorkerIdentifier:
             return cached["result"]
         return None
 
+    def transfer(self, old_track_id, new_track_id):
+        """Move a cached identity to a new track id.
+
+        The tracker sometimes drops a moving worker's track and re-acquires
+        them under a fresh id (churn). The pipeline detects that spatially and
+        calls this so the QR identity follows the person instead of dying with
+        the old id. Refreshes the timestamp — the worker is visibly present.
+        Returns the moved identity result, or None if there was nothing cached.
+        """
+        cached = self._cache.pop(old_track_id, None)
+        self._fail_count.pop(old_track_id, None)
+        if cached is None:
+            return None
+        cached["timestamp"] = time.time()
+        self._cache[new_track_id] = cached
+        return cached["result"]
+
     def clear_stale(self, active_track_ids):
-        stale = set(self._cache.keys()) - set(active_track_ids)
+        """Prune identities whose cache entry has outlived the TTL.
+
+        Deliberately NOT keyed on the active set: a single missed person
+        detection (blur, occlusion, pose change) drops a track from one
+        frame's results, and deleting the identity there forced a fresh QR
+        scan every time detection blipped. Identities survive absence for
+        cache_ttl; track ids are never reused within a run, so a lost track's
+        identity can only ever return to the same worker. The active set is
+        still used to drop decode-failure counters for gone tracks.
+        """
+        now = time.time()
+        stale = [
+            tid for tid, c in self._cache.items()
+            if (now - c["timestamp"]) >= self._cache_ttl
+        ]
         for tid in stale:
             del self._cache[tid]
-            self._fail_count.pop(tid, None)
+        active = set(active_track_ids)
+        for tid in list(self._fail_count.keys()):
+            if tid not in active:
+                del self._fail_count[tid]

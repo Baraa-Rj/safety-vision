@@ -29,6 +29,9 @@ class StubWorkerIdentifier:
     def identify(self, crop, track_id=None):
         return None
 
+    def transfer(self, old_track_id, new_track_id):
+        return None
+
     def clear_stale(self, active_track_ids):
         pass
 
@@ -208,14 +211,14 @@ class ConfigurablePPE:
         }]
 
 
-def _pipeline_with(detector, config):
+def _pipeline_with(detector, config, identifier=None):
     zone_monitor = ZoneMonitor()
     return SafetyPipeline(
         config=config,
         camera=StubCamera(),
         ppe_detector=detector,
         fall_detector=StubFallDetector(),
-        worker_identifier=StubWorkerIdentifier(),
+        worker_identifier=identifier or StubWorkerIdentifier(),
         zone_monitor=zone_monitor,
         renderer=FrameRenderer(zone_monitor, config.display),
         event_logger=EventLogger(),
@@ -288,6 +291,44 @@ def test_inheritance_requires_overlap(dummy_frame):
     events = pipeline.process_frame(dummy_frame)
     assert events["compliant_workers"] == []
     assert len(events["pending_workers"]) == 1
+
+
+def test_identity_survives_track_churn_and_occlusion(dummy_frame):
+    """Once scanned, a worker's QR identity must follow them through a
+    detection dropout (same id absent for a few frames) and through tracker
+    id churn — no rescan, no 'unknown worker'. Uses the real WorkerIdentifier
+    so the transfer/TTL wiring is exercised end to end."""
+    import time as _time
+    from src.worker_id import WorkerIdentifier
+
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    identifier = WorkerIdentifier()
+    identifier._cache[7] = {
+        "result": {"qr_data": "W042", "worker_name": None, "worker_id": "W042"},
+        "timestamp": _time.time(),
+    }
+    pipeline = _pipeline_with(detector, config, identifier=identifier)
+
+    for _ in range(config.compliance.window_size):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["compliant_workers"][0]["worker_id"] == "W042"
+
+    # Occlusion: the person vanishes from detections for a few frames — the
+    # identity must NOT be purged (old clear_stale deleted it here).
+    vanished = detector.detect
+    detector.detect = lambda frame: []
+    for _ in range(3):
+        pipeline.process_frame(dummy_frame)
+    detector.detect = vanished
+    events = pipeline.process_frame(dummy_frame)
+    assert events["compliant_workers"][0]["worker_id"] == "W042"
+
+    # Churn: re-acquired under a new id at the same spot → identity follows.
+    detector.track_id = 8
+    events = pipeline.process_frame(dummy_frame)
+    workers = events["compliant_workers"] + events["pending_workers"]
+    assert workers[0]["worker_id"] == "W042"
 
 
 def test_single_frame_violation_not_shown(dummy_frame):

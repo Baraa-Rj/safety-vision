@@ -60,6 +60,11 @@ class SafetyPipeline:
         # was confirmed compliant a moment ago. See _resolve_display.
         self._display_memory = {}
         self._active_track_ids = set()
+        # Last box + time each track id was seen — the substrate for churn
+        # bridging: when a brand-new id overlaps a recently-lost one, it IS
+        # that worker, and everything keyed by track id (QR identity, display
+        # verdict) is carried over. See _resolve_track_continuity.
+        self._track_last_seen = {}
 
         wf_required = (
             wet_floor_detector.config.consecutive_frames_required
@@ -84,24 +89,37 @@ class SafetyPipeline:
     def add_zone(self, zone_id, points):
         self.zone_monitor.add_zone(zone_id, points)
 
-    def _inherit_display_memory(self, bbox):
-        """BoT-SORT drops and re-creates a moving worker's track (ReID is off;
-        association is motion/IoU only), and the new id starts with an empty
-        evidence window — without this, every churn sent a compliant worker
-        back to Checking. Adopt the verdict of a recently-dead track whose last
-        box overlaps this one: same person, new id. Tracks still active this
-        frame are excluded so a new box next to a live worker can't steal
-        their state."""
+    def _resolve_track_continuity(self, track_id, bbox, now):
+        """Bridge tracker id churn: BoT-SORT drops and re-acquires a moving
+        worker under a fresh id (ReID is off; association is motion/IoU only),
+        and everything keyed by track id — the QR identity and the displayed
+        compliance verdict — would die with the old id. When an id is seen for
+        the FIRST time, find the recently-lost track (not active this frame,
+        seen within track_timeout_seconds) whose last box overlaps this one:
+        that is the same worker, so carry their state over to the new id.
+        Live tracks are excluded so a new box next to a live worker can't
+        steal their identity; the IoU floor keeps a worker across the room
+        from inheriting anything."""
+        if track_id in self._track_last_seen:
+            self._track_last_seen[track_id] = {"bbox": bbox, "ts": now}
+            return
+
+        timeout = self.config.compliance.track_timeout_seconds
         best_id, best_iou = None, 0.3
-        for tid, mem in self._display_memory.items():
-            if tid in self._active_track_ids:
+        for tid, seen in self._track_last_seen.items():
+            if tid in self._active_track_ids or now - seen["ts"] > timeout:
                 continue
-            iou = _iou(bbox, mem["bbox"])
+            iou = _iou(bbox, seen["bbox"])
             if iou > best_iou:
                 best_id, best_iou = tid, iou
-        if best_id is None:
-            return None
-        return self._display_memory.pop(best_id)
+
+        if best_id is not None:
+            self.worker_id.transfer(best_id, track_id)
+            if best_id in self._display_memory:
+                self._display_memory[track_id] = self._display_memory.pop(best_id)
+            del self._track_last_seen[best_id]
+
+        self._track_last_seen[track_id] = {"bbox": bbox, "ts": now}
 
     def _resolve_display(self, track_id, bbox, now):
         """Displayed verdict for a tracked person: "violation", "ok", or None
@@ -118,9 +136,9 @@ class SafetyPipeline:
         flagged = sorted(item for item, v in dstate.items() if v is True)
         pending = any(v is None for v in dstate.values())
 
+        # Churn inheritance already happened in _resolve_track_continuity, so
+        # a re-acquired worker's verdict is sitting under their new id.
         memory = self._display_memory.get(track_id)
-        if memory is None:
-            memory = self._inherit_display_memory(bbox)
 
         if flagged:
             window_full = all(
@@ -186,6 +204,11 @@ class SafetyPipeline:
         for i, result in enumerate(ppe_results):
             x1, y1, x2, y2 = result["person_bbox"]
             track_id = result.get("track_id")
+            # Must run before identify(): a churned id inherits its QR identity
+            # here, so the cache hit below finds it without a rescan.
+            if track_id is not None:
+                self._resolve_track_continuity(
+                    track_id, result["person_bbox"], events["timestamp"])
             person_crop = frame[y1:y2, x1:x2]
             qr_result = self.worker_id.identify(person_crop, track_id=track_id)
             worker_id = qr_result["worker_id"] if qr_result else None
@@ -307,12 +330,16 @@ class SafetyPipeline:
         if self._compliance_cleanup_counter >= _COMPLIANCE_CLEANUP_EVERY:
             self.compliance_tracker.cleanup_stale(current_ts=events["timestamp"])
             self.violation_confirmer.cleanup(events["timestamp"])
-            # Same timeout as the tracker: a verdict too old to inherit is
-            # a worker who actually left, not a churned id.
+            # Same timeout as the tracker: state too old to inherit belongs
+            # to a worker who actually left, not a churned id.
             timeout = self.config.compliance.track_timeout_seconds
             self._display_memory = {
                 tid: m for tid, m in self._display_memory.items()
                 if events["timestamp"] - m["ts"] <= timeout
+            }
+            self._track_last_seen = {
+                tid: s for tid, s in self._track_last_seen.items()
+                if events["timestamp"] - s["ts"] <= timeout
             }
             self._compliance_cleanup_counter = 0
 
