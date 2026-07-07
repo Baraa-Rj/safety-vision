@@ -99,7 +99,7 @@ class FallDetectionConfig:
     # No backend alert until a fall has persisted this long — filters brief
     # false positives (a stumble or quick crouch). The fall is still detected and
     # drawn on screen immediately; only the alert (POST) waits.
-    alert_delay_seconds: float = 10.0
+    alert_delay_seconds: float = 8.0
     still_motion_px: int = 15               # centroid move below this = "still"
     medium_seconds: float = 5.0             # on the ground this long -> MEDIUM
     high_still_seconds: float = 20.0        # motionless this long -> HIGH (urgent)
@@ -144,7 +144,7 @@ class ComplianceConfig:
     uncertain_upper: float = 0.35
     # A violation must be constant for this long before it's sent to the backend
     # — filters single-frame false pops.
-    confirm_seconds: float = 10.0
+    confirm_seconds: float = 8.0
 
 
 @dataclass
@@ -184,10 +184,10 @@ class AlertConfig:
     endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
     # Backoff base per alert key: first alert immediate (violations are
-    # already 5s-confirmed upstream), then repeats at 2x, 3x, 4x... this gap
-    # (10s, 15s, 20s, ...) so an ongoing violation notifies with decreasing
-    # frequency instead of a fixed-rate stream.
-    cooldown_seconds: float = 5.0
+    # already confirm_seconds-confirmed upstream), then repeats at 2x, 3x,
+    # 4x... this gap (16s, 24s, 32s, ...) so an ongoing violation notifies
+    # with decreasing frequency instead of a fixed-rate stream.
+    cooldown_seconds: float = 8.0
     # Zone breach alerts have a dedicated endpoint + payload
     # ({imgImage, userId, zoneId, message}), so this is derived (not blank).
     zone_endpoint: str = field(default_factory=_zone_alert_endpoint)
