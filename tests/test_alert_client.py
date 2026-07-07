@@ -111,3 +111,29 @@ def test_send_fall_alert_noop_without_endpoint():
     c, sent = _client()                       # no fall_endpoint configured
     c.send_fall_alert({"severity": "LOW", "alert": True}, FRAME)
     assert sent == []
+
+
+# --- wet floor alerts ---
+
+def _wf_event():
+    return {"bbox": [0, 0, 10, 10], "confidence": 0.95,
+            "area_pct": 1.4, "consecutive_count": 5, "first_seen_ts": 1.0}
+
+
+def test_wet_floor_alert_payload_shape(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    wet_floor_endpoint="http://x/api/wet/alert/create")
+    c._post_wet_floor_alert(_wf_event(), FRAME)
+
+    p = captured["json"]
+    assert set(p.keys()) == {"description", "imgImage"}   # exact backend contract
+    assert p["imgImage"]                                  # frame always attached
+    assert "Wet floor" in p["description"]
+    assert captured["url"] == "http://x/api/wet/alert/create"
+
+
+def test_send_wet_floor_alert_noop_without_endpoint():
+    c, sent = _client()                       # no wet_floor_endpoint configured
+    c.send_wet_floor_alert(_wf_event(), FRAME)
+    assert sent == []

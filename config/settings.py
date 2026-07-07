@@ -33,6 +33,10 @@ def _fall_endpoint():
     return os.environ.get("FALL_ALERTS_ENDPOINT") or f"{_backend_base()}/api/fall-alerts/create"
 
 
+def _wet_endpoint():
+    return os.environ.get("WET_ALERTS_ENDPOINT") or f"{_backend_base()}/api/wet/alert/create"
+
+
 @dataclass
 class CameraConfig:
     source: str = field(default_factory=_camera_source)
@@ -133,10 +137,12 @@ class AlertConfig:
     endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
     cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
-    # Zone / wet-floor alerts POST a different payload shape; leave blank to
-    # disable them so they never hit the PPE endpoint with the wrong body.
+    # Zone alerts POST a different payload shape; leave blank to disable so they
+    # never hit the PPE endpoint with the wrong body.
     zone_endpoint: str = ""
-    wet_floor_endpoint: str = ""
+    # Wet floor has a dedicated endpoint + payload ({description, imgImage}), so
+    # this is derived (not blank) — same rationale as fall_endpoint below.
+    wet_floor_endpoint: str = field(default_factory=_wet_endpoint)
     # Falls have a dedicated endpoint + payload, so this is derived (not blank).
     fall_endpoint: str = field(default_factory=_fall_endpoint)
     # The fall endpoint requires a userId FK. A fallen worker often can't be
@@ -157,7 +163,7 @@ class ZoneDefinition:
 
 @dataclass
 class ZoneConfig:
-    enabled: bool = False                # zone monitoring off for now; flip to re-enable
+    enabled: bool = True                 # zone monitoring on (loads data/zones.json)
     zones: List[ZoneDefinition] = field(default_factory=list)
     alert_enabled: bool = True
     cooldown_seconds: float = 30.0

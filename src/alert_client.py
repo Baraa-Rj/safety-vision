@@ -77,21 +77,13 @@ class AlertClient:
 
     def _post_wet_floor_alert(self, wf_event, frame):
         try:
+            # Backend contract (POST /api/wet/alert/create) is exactly
+            # {description, imgImage}. A wet floor is a location hazard, not a
+            # person, so the frame is always attached (no id-only case).
             _, buffer = cv2.imencode(".jpg", frame)
-            img_b64 = base64.b64encode(buffer).decode("utf-8")
-
-            # zone_id tagging is deferred — ZoneMonitor exposes only
-            # check_person (foot-of-bbox semantics for people). A point-in-zone
-            # helper for arbitrary centroids can be added when needed.
             payload = {
-                "imgImage": img_b64,
-                "event_type": "wet_floor",
-                "bbox": wf_event["bbox"],
-                "confidence": wf_event["confidence"],
-                "areaPct": wf_event["area_pct"],
-                "consecutiveCount": wf_event.get("consecutive_count"),
-                "firstSeenTs": wf_event.get("first_seen_ts"),
-                "message": "Wet floor detected",
+                "description": f"Wet floor detected (confidence {wf_event['confidence']:.0%})",
+                "imgImage": base64.b64encode(buffer).decode("utf-8"),
             }
 
             _log_outgoing(self.wet_floor_endpoint, payload)
