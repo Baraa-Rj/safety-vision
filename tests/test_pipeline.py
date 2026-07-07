@@ -29,6 +29,9 @@ class StubWorkerIdentifier:
     def identify(self, crop, track_id=None):
         return None
 
+    def get_cached(self, track_id):
+        return None
+
     def transfer(self, old_track_id, new_track_id):
         return None
 
@@ -211,7 +214,7 @@ class ConfigurablePPE:
         }]
 
 
-def _pipeline_with(detector, config, identifier=None):
+def _pipeline_with(detector, config, identifier=None, wet=None):
     zone_monitor = ZoneMonitor()
     return SafetyPipeline(
         config=config,
@@ -223,6 +226,7 @@ def _pipeline_with(detector, config, identifier=None):
         renderer=FrameRenderer(zone_monitor, config.display),
         event_logger=EventLogger(),
         alert_client=StubAlertClient(),
+        wet_floor_detector=wet,
     )
 
 
@@ -289,7 +293,10 @@ def test_inheritance_requires_overlap(dummy_frame):
     detector.detected = []
     detector.missing = ["helmet", "vest"]
     events = pipeline.process_frame(dummy_frame)
-    assert events["compliant_workers"] == []
+    # The new track earned nothing — it's Checking. (Dead track 7's ghost box
+    # legitimately holds at ITS old spot; only non-held entries matter here.)
+    live = [w for w in events["compliant_workers"] if not w.get("held")]
+    assert live == []
     assert len(events["pending_workers"]) == 1
 
 
@@ -329,6 +336,153 @@ def test_identity_survives_track_churn_and_occlusion(dummy_frame):
     events = pipeline.process_frame(dummy_frame)
     workers = events["compliant_workers"] + events["pending_workers"]
     assert workers[0]["worker_id"] == "W042"
+
+
+def test_held_box_bridges_detection_dropout(dummy_frame):
+    """One missed detection must not erase the worker's rectangle: the last
+    box is re-emitted (with verdict and identity) until box_hold_seconds
+    passes, then disappears — a worker who left takes their box along."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    pipeline = _pipeline_with(detector, config)
+
+    for _ in range(config.compliance.window_size):
+        events = pipeline.process_frame(dummy_frame)
+    assert len(events["compliant_workers"]) == 1
+
+    # Detection drops out entirely — the box holds at the last position.
+    detector.detect = lambda frame: []
+    events = pipeline.process_frame(dummy_frame)
+    held = events["compliant_workers"]
+    assert len(held) == 1
+    assert held[0]["held"] is True
+    assert held[0]["bbox"] == [10, 10, 100, 200]
+    assert held[0]["track_id"] == 7
+
+    # Past the hold window the ghost expires.
+    pipeline._track_last_seen[7]["ts"] -= config.display.box_hold_seconds + 1
+    events = pipeline.process_frame(dummy_frame)
+    assert events["compliant_workers"] == []
+    assert events["ppe_violations"] == []
+
+
+def test_held_box_keeps_violation_verdict(dummy_frame):
+    """A violator's ghost box stays red with the same missing items — the
+    dropout must not launder a violation into a blank frame."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    detector.detected = ["helmet"]
+    detector.missing = ["vest"]
+    pipeline = _pipeline_with(detector, config)
+
+    for _ in range(config.compliance.window_size):
+        events = pipeline.process_frame(dummy_frame)
+    assert len(events["ppe_violations"]) == 1
+
+    detector.detect = lambda frame: []
+    events = pipeline.process_frame(dummy_frame)
+    assert len(events["ppe_violations"]) == 1
+    assert events["ppe_violations"][0]["held"] is True
+    assert events["ppe_violations"][0]["missing"] == ["vest"]
+
+
+def test_held_box_suppressed_by_overlapping_detection(dummy_frame):
+    """If a person IS detected where the dead track was (re-acquired under a
+    new id that missed the continuity IoU bar), no ghost is drawn — one
+    worker, one box."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    pipeline = _pipeline_with(detector, config)
+
+    for _ in range(config.compliance.window_size):
+        pipeline.process_frame(dummy_frame)
+
+    # Same spot, new id 99 — continuity transfers state to 99; and even if it
+    # didn't, the overlap guard blocks a second box for dead track 7.
+    detector.track_id = 99
+    events = pipeline.process_frame(dummy_frame)
+    boxes = (events["compliant_workers"] + events["ppe_violations"]
+             + events["pending_workers"])
+    assert len(boxes) == 1
+
+
+def test_continuity_bridges_moving_worker_gap(dummy_frame):
+    """A walking worker re-acquired PAST the overlap point (IoU = 0 with the
+    dead track) still keeps their verdict: a unique dead track within one
+    body height is the same worker. This is what removes the ghost-trail —
+    the old entry transfers instead of lingering behind them."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7, bbox=[10, 10, 100, 200])
+    pipeline = _pipeline_with(detector, config)
+    for _ in range(config.compliance.window_size):
+        pipeline.process_frame(dummy_frame)
+
+    # New id, 120 px ahead: boxes disjoint, centre distance < height (190).
+    detector.track_id = 8
+    detector.bbox = [130, 10, 220, 200]
+    events = pipeline.process_frame(dummy_frame)
+    assert len(events["compliant_workers"]) == 1
+    assert events["compliant_workers"][0]["track_id"] == 8
+    assert all(not w.get("held") for w in events["compliant_workers"])
+
+
+def test_ghost_suppressed_near_current_detection(dummy_frame):
+    """A ghost within ~1.2 body heights of ANY current detection is dropped —
+    the trail-effect guard for workers re-acquired beyond continuity range."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7, bbox=[10, 10, 100, 200])
+    pipeline = _pipeline_with(detector, config)
+    for _ in range(config.compliance.window_size):
+        pipeline.process_frame(dummy_frame)
+
+    # 200 px ahead: too far for continuity (dist > height) but inside ghost
+    # reach (1.2 * height = 228) -> the dead track leaves no box behind.
+    detector.track_id = 8
+    detector.bbox = [210, 10, 300, 200]
+    events = pipeline.process_frame(dummy_frame)
+    held = [w for w in events["compliant_workers"] + events["ppe_violations"]
+            if w.get("held")]
+    assert held == []
+
+
+def test_wet_floor_runs_every_nth_frame(dummy_frame):
+    """The seg model shares the loop with PPE detection; it must only run on
+    every Nth frame, with confirmed events re-emitted in between (no blink)."""
+    from config.settings import WetFloorConfig
+
+    class CountingWet:
+        def __init__(self):
+            self.calls = 0
+            self.config = WetFloorConfig(enabled=True, process_every_n=3)
+
+        def detect(self, frame):
+            self.calls += 1
+            return [{"bbox": [0, 0, 50, 50], "confidence": 0.9, "area_pct": 1.0}]
+
+    config = PipelineConfig()
+    wet = CountingWet()
+    pipeline = _pipeline_with(ConfigurablePPE(), config, wet=wet)
+    for _ in range(15):
+        events = pipeline.process_frame(dummy_frame)
+    assert wet.calls == 5                        # every 3rd frame
+    assert len(events["wet_floor_events"]) == 1  # 5 processed frames = confirmed
+    events = pipeline.process_frame(dummy_frame)  # skipped frame
+    assert len(events["wet_floor_events"]) == 1  # cached event re-emitted
+
+
+def test_track_without_verdict_never_ghosts(dummy_frame):
+    """A track that vanished while still Checking (usually a phantom person
+    box) leaves nothing behind — ghosts require an earned verdict."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=5)
+    pipeline = _pipeline_with(detector, config)
+
+    # Fewer frames than display_min_evidence -> no verdict earned.
+    pipeline.process_frame(dummy_frame)
+    detector.detect = lambda frame: []
+    events = pipeline.process_frame(dummy_frame)
+    assert events["compliant_workers"] == []
+    assert events["ppe_violations"] == []
 
 
 def test_single_frame_violation_not_shown(dummy_frame):

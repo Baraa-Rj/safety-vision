@@ -68,6 +68,10 @@ class PPEConfig:
     })
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
+    # Keep vest/helmet sightings down to this confidence and report them as
+    # ppe_confidences (uncertain evidence) — must match uncertain_lower in
+    # ComplianceConfig.
+    ppe_uncertain_floor: float = 0.25
     # Inference resolution. 640 (YOLO's native) resolves small/distant PPE and
     # partially-occluded vests far better than 480; the cost is ~1.8x slower
     # inference, acceptable on the process_every_n cadence.
@@ -123,8 +127,13 @@ class ComplianceConfig:
     # or a transient phantom person box (a compliant worker shown VIOLATION).
     display_min_evidence: int = 3
     track_timeout_seconds: float = 5.0
+    # Confidence bands for tracker observations. Aligned with the detector:
+    # >= 0.35 (the PPE class threshold) counts as present, < 0.25 (the
+    # detector's ppe_uncertain_floor, below which sightings aren't reported)
+    # as missing, in between as uncertain — evidence against "missing" that
+    # doesn't yet prove "present".
     uncertain_lower: float = 0.25
-    uncertain_upper: float = 0.40
+    uncertain_upper: float = 0.35
     # A violation must be constant for this long before it's sent to the backend
     # — filters single-frame false pops.
     confirm_seconds: float = 15.0
@@ -137,12 +146,24 @@ class WetFloorConfig:
     confidence_threshold: float = 0.5
     min_area_pct: float = 0.25                  # ignore boxes <0.25% of frame (real papers run 0.4-1.4%)
     consecutive_frames_required: int = 5        # temporal smoothing
+    # Run the seg model only every Nth processed frame. A spill is a static
+    # hazard, and this model runs in the same loop as PPE detection — skipping
+    # it most frames cuts detection-loop latency, which is what keeps the
+    # worker boxes fresh on CPU. Confirmed events are re-emitted on skipped
+    # frames so the wet-floor box doesn't blink.
+    process_every_n: int = 3
 
 
 @dataclass
 class DisplayConfig:
     max_display_width: int = 960
     window_name: str = "Safety Vision"
+    # A tracked worker whose detection drops out keeps their last box (and
+    # verdict) on screen for this long — bridges blur/pose/occlusion dropouts
+    # so rectangles don't flicker off while the worker is clearly still there.
+    # Short enough that a worker who genuinely leaves doesn't haunt the frame,
+    # and that a fast walker doesn't leave a trail of expired positions.
+    box_hold_seconds: float = 1.0
 
 
 @dataclass

@@ -105,10 +105,16 @@ class PPEComplianceTracker:
         with no PPE at all would be drawn green until window_size frames
         accumulate — and again after every track-id churn. A bare first-frame
         vote fails the other way: one blurry entry frame or a transient
-        phantom person box flashes VIOLATION. So during warm-up a verdict
-        needs display_min_evidence observations of the winning label AND a
-        strict majority; anything less stays None. Once the window has filled,
-        the hysteresis verdict takes over.
+        phantom person box flashes VIOLATION. So during warm-up:
+        - RED needs display_min_evidence frames of PURE absence — the model
+          never saw the item at all, not even below threshold. A single
+          present or uncertain sighting blocks the fast red, because entry
+          frames (half-visible worker, motion blur) are exactly where the
+          model under-detects and a false red is the costlier error.
+        - GREEN needs display_min_evidence present frames and a majority.
+        Anything less stays None. Once the window has filled, the hysteresis
+        verdict takes over — a mixed-evidence worker gets THAT verdict, just
+        a few frames later.
         """
         track_state = self._tracks.get(track_id)
         state = {}
@@ -122,7 +128,7 @@ class PPEComplianceTracker:
                 missing = sum(1 for x in item_state.window if x == "missing")
                 present = sum(1 for x in item_state.window if x == "present")
                 min_ev = self.config.display_min_evidence
-                if missing >= min_ev and missing > present:
+                if missing >= min_ev and missing == len(item_state.window):
                     state[item] = True
                 elif present >= min_ev and present > missing:
                     state[item] = False

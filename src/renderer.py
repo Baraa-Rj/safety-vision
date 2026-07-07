@@ -1,5 +1,31 @@
+import time
+
 import cv2
 from config.settings import DisplayConfig
+
+# Never extrapolate a box further than this many seconds of motion — beyond
+# it the estimate is a guess and the box would sail past the worker.
+_MAX_PROJECT_SECONDS = 0.8
+
+
+def project_bbox(bbox, velocity, age, frame_shape):
+    """Shift a box along its track velocity by the age of the detection
+    result. Detection runs a full inference cycle behind the displayed frame,
+    so an unprojected box trails a moving worker by exactly that latency;
+    riding the (EMA-smoothed) velocity forward closes most of the gap. The
+    shift is capped in time and clamped to the frame."""
+    if not velocity or age <= 0:
+        return bbox
+    dt = min(age, _MAX_PROJECT_SECONDS)
+    dx, dy = int(velocity[0] * dt), int(velocity[1] * dt)
+    if dx == 0 and dy == 0:
+        return bbox
+    h, w = frame_shape[:2]
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    x1 = max(0, min(x1 + dx, w - bw))
+    y1 = max(0, min(y1 + dy, h - bh))
+    return [x1, y1, x1 + bw, y1 + bh]
 
 
 class FrameRenderer:
@@ -9,9 +35,13 @@ class FrameRenderer:
 
     def draw(self, frame, events):
         display = frame.copy()
+        # How far behind the displayed frame these events are — worker boxes
+        # are projected forward by this much along their track velocity.
+        age = max(0.0, time.time() - events.get("timestamp", time.time()))
 
         for worker in events["compliant_workers"]:
-            x1, y1, x2, y2 = worker["bbox"]
+            x1, y1, x2, y2 = project_bbox(
+                worker["bbox"], worker.get("velocity"), age, frame.shape)
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
             wid = worker.get("worker_name") or worker.get("worker_id") or "?"
             cv2.putText(display, f"W:{wid} OK", (x1, y1 - 10),
@@ -23,7 +53,8 @@ class FrameRenderer:
         # simply gets no annotation until one is earned.
 
         for violation in events["ppe_violations"]:
-            x1, y1, x2, y2 = violation["bbox"]
+            x1, y1, x2, y2 = project_bbox(
+                violation["bbox"], violation.get("velocity"), age, frame.shape)
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 0, 255), 2)
             label = f"VIOLATION: {', '.join(violation['missing'])}"
             wid = violation.get("worker_name") or violation.get("worker_id") or "?"

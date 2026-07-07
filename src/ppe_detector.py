@@ -5,7 +5,8 @@ from ultralytics import YOLO
 class PPEDetector:
     def __init__(self, model_path, confidence=0.35, required_ppe=None,
                  overlap_threshold=0.5, class_confidences=None,
-                 tracker_config="botsort.yaml", imgsz=640):
+                 tracker_config="botsort.yaml", imgsz=640,
+                 ppe_uncertain_floor=0.25):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.use_half = self.device != "cpu"
         self.model = YOLO(model_path)
@@ -22,12 +23,20 @@ class PPEDetector:
         # reads these so best.pt runs only once per frame.
         self.fallen_detections = []
 
+        # Vest/helmet sightings BELOW the class threshold still carry signal:
+        # a vest glimpsed at 0.30 while a worker enters the frame is evidence
+        # against "missing vest", even though it doesn't count as detected.
+        # Keep required-PPE detections down to this floor and report their
+        # confidences (ppe_confidences) so the compliance tracker's uncertain
+        # band can use them. Person/fallen keep their hard thresholds.
+        self.ppe_uncertain_floor = ppe_uncertain_floor
+
         # YOLO drops boxes below `conf` before they reach us, so run inference
         # at the floor of all per-class thresholds and filter in Python below.
+        floors = [self.confidence, self.ppe_uncertain_floor]
         if self.class_confidences:
-            self._inference_conf = min(self.confidence, min(self.class_confidences.values()))
-        else:
-            self._inference_conf = self.confidence
+            floors.append(min(self.class_confidences.values()))
+        self._inference_conf = min(floors)
 
     def _class_threshold(self, cls_name):
         return self.class_confidences.get(cls_name, self.confidence)
@@ -49,7 +58,12 @@ class PPEDetector:
             cls_name = self.model.names[cls_id]
             conf = float(box.conf[0])
 
-            if conf < self._class_threshold(cls_name):
+            if cls_name in self.required_ppe:
+                # Required PPE: keep down to the uncertain floor; whether it
+                # counts as "detected" is decided per class threshold below.
+                if conf < min(self.ppe_uncertain_floor, self._class_threshold(cls_name)):
+                    continue
+            elif conf < self._class_threshold(cls_name):
                 continue
 
             track_id = int(box.id[0]) if box.id is not None else None
@@ -90,7 +104,7 @@ class PPEDetector:
         # marks both compliant ("vest bleed"). The item must also sit in the body
         # region where that PPE is worn (helmet on the head, vest on the torso),
         # which rejects held/floor items and cross-body bleed.
-        detected_by_person = {id(p): set() for p in persons}
+        detected_by_person = {id(p): {} for p in persons}
         for ppe in ppe_items:
             best_person = None
             best_ratio = self.overlap_threshold
@@ -101,11 +115,18 @@ class PPEDetector:
                     best_ratio = ratio
                     best_person = person
             if best_person is not None:
-                detected_by_person[id(best_person)].add(ppe["class_name"])
+                confs = detected_by_person[id(best_person)]
+                cls = ppe["class_name"]
+                confs[cls] = max(confs.get(cls, 0.0), ppe["confidence"])
 
         results_list = []
         for person in persons:
-            detected_ppe = detected_by_person[id(person)]
+            confs = detected_by_person[id(person)]
+            # "Detected" (and thus compliant/missing) still requires the full
+            # class threshold; sub-threshold sightings live only in
+            # ppe_confidences, feeding the tracker's uncertain band.
+            detected_ppe = {c for c, conf in confs.items()
+                            if conf >= self._class_threshold(c)}
             missing_ppe = self.required_ppe - detected_ppe
 
             results_list.append({
@@ -114,6 +135,7 @@ class PPEDetector:
                 "compliant": len(missing_ppe) == 0,
                 "detected_ppe": list(detected_ppe),
                 "missing_ppe": list(missing_ppe),
+                "ppe_confidences": confs,
             })
 
         return results_list

@@ -72,6 +72,8 @@ class SafetyPipeline:
         )
         self._wet_floor_history = deque(maxlen=wf_required)
         self._wet_floor_first_seen_ts = None
+        self._wf_frame_counter = 0
+        self._last_wet_events = []
 
         self._detection_thread = None
         self._events_lock = threading.Lock()
@@ -94,32 +96,60 @@ class SafetyPipeline:
         worker under a fresh id (ReID is off; association is motion/IoU only),
         and everything keyed by track id — the QR identity and the displayed
         compliance verdict — would die with the old id. When an id is seen for
-        the FIRST time, find the recently-lost track (not active this frame,
-        seen within track_timeout_seconds) whose last box overlaps this one:
-        that is the same worker, so carry their state over to the new id.
-        Live tracks are excluded so a new box next to a live worker can't
-        steal their identity; the IoU floor keeps a worker across the room
-        from inheriting anything."""
+        the FIRST time, find the recently-lost track (not active this frame)
+        that is the same worker and carry their state over to the new id:
+        either the last box overlaps (IoU, stationary/slow worker) or — for a
+        walking worker whose dropout gap moved them past any overlap — there
+        is exactly ONE dead track within a body height, seen in the last
+        1.5s. Uniqueness is required for the distance match so two crossing
+        workers never swap state; live tracks are excluded so a new box next
+        to a live worker can't steal their identity.
+
+        Also maintains each track's box velocity (EMA of center movement,
+        px/s) — the renderer uses it to project boxes forward over the
+        detection latency so they ride with the worker instead of trailing."""
         if track_id in self._track_last_seen:
-            self._track_last_seen[track_id] = {"bbox": bbox, "ts": now}
+            prev = self._track_last_seen[track_id]
+            dt = now - prev["ts"]
+            vel = prev.get("vel", (0.0, 0.0))
+            if 0 < dt <= 1.5:
+                pcx = (prev["bbox"][0] + prev["bbox"][2]) / 2.0
+                pcy = (prev["bbox"][1] + prev["bbox"][3]) / 2.0
+                cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+                vel = (0.6 * (cx - pcx) / dt + 0.4 * vel[0],
+                       0.6 * (cy - pcy) / dt + 0.4 * vel[1])
+            else:
+                vel = (0.0, 0.0)   # gap too long — stale velocity misleads
+            self._track_last_seen[track_id] = {"bbox": bbox, "ts": now, "vel": vel}
             return
 
         timeout = self.config.compliance.track_timeout_seconds
+        cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
         best_id, best_iou = None, 0.3
+        near = []
         for tid, seen in self._track_last_seen.items():
             if tid in self._active_track_ids or now - seen["ts"] > timeout:
                 continue
-            iou = _iou(bbox, seen["bbox"])
-            if iou > best_iou:
-                best_id, best_iou = tid, iou
+            if _iou(bbox, seen["bbox"]) > best_iou:
+                best_id, best_iou = tid, _iou(bbox, seen["bbox"])
+            if now - seen["ts"] <= 1.5:
+                sx1, sy1, sx2, sy2 = seen["bbox"]
+                scx, scy = (sx1 + sx2) / 2.0, (sy1 + sy2) / 2.0
+                height = max(sy2 - sy1, 1)
+                if ((cx - scx) ** 2 + (cy - scy) ** 2) ** 0.5 <= height:
+                    near.append(tid)
+        if best_id is None and len(near) == 1:
+            best_id = near[0]
 
+        vel = (0.0, 0.0)
         if best_id is not None:
             self.worker_id.transfer(best_id, track_id)
             if best_id in self._display_memory:
                 self._display_memory[track_id] = self._display_memory.pop(best_id)
+            vel = self._track_last_seen[best_id].get("vel", (0.0, 0.0))
             del self._track_last_seen[best_id]
 
-        self._track_last_seen[track_id] = {"bbox": bbox, "ts": now}
+        self._track_last_seen[track_id] = {"bbox": bbox, "ts": now, "vel": vel}
 
     def _resolve_display(self, track_id, bbox, now):
         """Displayed verdict for a tracked person: "violation", "ok", or None
@@ -218,15 +248,19 @@ class SafetyPipeline:
 
             # Feed the temporal smoother every tracked person, compliant or not,
             # so present observations accumulate and can clear prior alerts.
-            # PPEDetector aggregates by class and does not expose per-item
-            # confidence, so we encode presence as 1.0 and absence as None.
-            # The tracker's uncertain-band logic is therefore dormant in
-            # production but exercised by tests against the API directly.
+            # Observations carry the detector's per-item confidence: a vest
+            # glimpsed below the detection threshold lands in the tracker's
+            # uncertain band (neither missing nor present), so entry-frame
+            # low-confidence sightings don't vote a compliant worker red.
+            # Detectors without ppe_confidences (test stubs) fall back to the
+            # binary present/absent encoding.
             tracker_actions = None
             if track_id is not None:
+                confs = result.get("ppe_confidences")
+                if confs is None:
+                    confs = {item: 1.0 for item in result["detected_ppe"]}
                 observations = {
-                    item: 1.0 if item in result["detected_ppe"] else None
-                    for item in self.required_items
+                    item: confs.get(item) for item in self.required_items
                 }
                 tracker_actions = self.compliance_tracker.update(
                     track_id, observations, timestamp=events["timestamp"],
@@ -273,6 +307,13 @@ class SafetyPipeline:
                 display_violation = not result["compliant"]
                 display_missing = result["missing_ppe"]
 
+            # Velocity rides along so the renderer can project the box over
+            # the detection latency (boxes follow a moving worker instead of
+            # trailing one inference cycle behind).
+            velocity = (0.0, 0.0)
+            if track_id is not None and track_id in self._track_last_seen:
+                velocity = self._track_last_seen[track_id].get("vel", (0.0, 0.0))
+
             if display_violation:
                 events["ppe_violations"].append({
                     "worker_id": worker_id,
@@ -283,6 +324,7 @@ class SafetyPipeline:
                     "missing": display_missing,
                     "detected": result["detected_ppe"],
                     "zone": zone,
+                    "velocity": velocity,
                 })
             elif display_pending:
                 events["pending_workers"].append({
@@ -297,6 +339,7 @@ class SafetyPipeline:
                     "worker_name": worker_name,
                     "track_id": track_id,
                     "bbox": result["person_bbox"],
+                    "velocity": velocity,
                 })
 
             # Backend alert: sustained, time-confirmed violation — separate from
@@ -323,6 +366,8 @@ class SafetyPipeline:
                     "zone_backend_id": self.zone_monitor.backend_ids.get(zone, 0),
                 })
 
+        self._append_held_boxes(events, ppe_results)
+
         active_ids = [r.get("track_id") for r in ppe_results if r.get("track_id") is not None]
         self.worker_id.clear_stale(active_ids)
 
@@ -348,7 +393,76 @@ class SafetyPipeline:
 
         return events
 
+    def _append_held_boxes(self, events, ppe_results):
+        """Ghost boxes: keep a worker's rectangle on screen through short
+        detection dropouts. YOLO only emits boxes for detections matched THIS
+        frame, so one blurred/occluded frame erased the worker from the display
+        even though the track (and the worker) were still there. For every
+        track seen within box_hold_seconds but absent from this frame, re-emit
+        its last known box with its remembered verdict and cached identity.
+
+        Guards against wrong/stale boxes:
+        - only tracks with an EARNED verdict are held (never ghost a track
+          that was still Checking — usually a phantom);
+        - a held box near any current person or fallen detection is dropped —
+          proximity (1.2 body heights), not just overlap, so a walking worker
+          re-acquired past the overlap point doesn't drag a trail of ghosts
+          behind them;
+        - the hold expires after box_hold_seconds, so a worker who actually
+          leaves takes their box with them."""
+        now = events["timestamp"]
+        hold = self.config.display.box_hold_seconds
+        current_boxes = [r["person_bbox"] for r in ppe_results]
+        current_boxes += [
+            f["bbox"] for f in getattr(self.ppe_detector, "fallen_detections", [])
+        ]
+
+        def _near(ghost_box, box):
+            gx1, gy1, gx2, gy2 = ghost_box
+            gcx, gcy = (gx1 + gx2) / 2.0, (gy1 + gy2) / 2.0
+            bcx, bcy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+            reach = 1.2 * max(gy2 - gy1, 1)
+            return ((gcx - bcx) ** 2 + (gcy - bcy) ** 2) ** 0.5 <= reach
+
+        for tid, seen in self._track_last_seen.items():
+            if tid in self._active_track_ids or now - seen["ts"] > hold:
+                continue
+            memory = self._display_memory.get(tid)
+            if memory is None:
+                continue
+            if any(_iou(seen["bbox"], box) > 0.3 or _near(seen["bbox"], box)
+                   for box in current_boxes):
+                continue
+
+            identity = self.worker_id.get_cached(tid)
+            entry = {
+                "worker_id": identity["worker_id"] if identity else None,
+                "worker_name": identity["worker_name"] if identity else None,
+                "track_id": tid,
+                "bbox": seen["bbox"],
+                "held": True,
+                # Ghosts never move: extrapolating a box we can't see is how
+                # rectangles end up on empty floor.
+                "velocity": (0.0, 0.0),
+            }
+            if memory["verdict"] == "violation":
+                entry.update({"qr_data": None, "missing": memory["missing"],
+                              "detected": [], "zone": None})
+                events["ppe_violations"].append(entry)
+            else:
+                events["compliant_workers"].append(entry)
+
     def _update_wet_floor(self, frame, events):
+        # The seg model shares the detection loop with PPE; running it every
+        # Nth frame cuts per-frame latency (fresher worker boxes on CPU). A
+        # spill doesn't move, so skipped frames re-emit the last confirmed
+        # events and the smoothing history simply advances more slowly.
+        n = getattr(self.wet_floor_detector.config, "process_every_n", 1)
+        self._wf_frame_counter += 1
+        if n > 1 and self._wf_frame_counter % n:
+            events["wet_floor_events"].extend(self._last_wet_events)
+            return
+
         detections = self.wet_floor_detector.detect(frame)
 
         # Take the highest-confidence detection per frame for smoothing —
@@ -357,6 +471,7 @@ class SafetyPipeline:
             self._wet_floor_history.append(None)
             if not any(self._wet_floor_history):
                 self._wet_floor_first_seen_ts = None
+            self._last_wet_events = []
             return
 
         best = max(detections, key=lambda d: d["confidence"])
@@ -384,6 +499,7 @@ class SafetyPipeline:
                 "consecutive_count": consecutive_count,
                 "first_seen_ts": self._wet_floor_first_seen_ts,
             })
+        self._last_wet_events = list(events["wet_floor_events"])
 
     def _detection_loop(self):
         while self.running:

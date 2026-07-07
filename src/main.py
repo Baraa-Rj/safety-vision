@@ -40,6 +40,7 @@ ppe_detector = PPEDetector(
     class_confidences=config.ppe.class_confidences,
     tracker_config=config.ppe.tracker_config,
     imgsz=config.ppe.imgsz,
+    ppe_uncertain_floor=config.ppe.ppe_uncertain_floor,
 )
 # Detection-based fall detection: gates the 'fallen' class emitted by the PPE
 # detector (models/best.pt). Toggle with FallDetectionConfig.enabled.
