@@ -34,14 +34,43 @@ def test_different_workers_not_suppressed():
     assert len(sent) == 2
 
 
-def test_alert_resent_after_cooldown_elapses():
+def test_alert_resent_after_backoff_gap_elapses():
+    # After k alerts the next needs a gap of cooldown_seconds * (k + 1):
+    # the second alert requires 2x the base.
     c, sent = _client(cooldown_seconds=60.0)
     c.send_ppe_alert(_violation(), FRAME)
-    # Backdate the recorded time so the cooldown window has "passed".
     key = next(iter(c._last_alert_time))
-    c._last_alert_time[key] -= 61.0
+    c._last_alert_time[key] -= 61.0          # one base elapsed: not enough now
+    c.send_ppe_alert(_violation(), FRAME)
+    assert len(sent) == 1
+    c._last_alert_time[key] -= 60.0          # two bases elapsed in total
     c.send_ppe_alert(_violation(), FRAME)
     assert len(sent) == 2
+
+
+def test_backoff_intervals_increase_arithmetically():
+    # 5s base: first immediate, then gaps of 10, 15, 20 seconds.
+    c, sent = _client(cooldown_seconds=5.0)
+    now = 1000.0
+    assert c._allow("W1", now) is True                 # first alert
+    assert c._allow("W1", now + 9) is False
+    assert c._allow("W1", now + 10) is True            # +10s
+    assert c._allow("W1", now + 10 + 14) is False
+    assert c._allow("W1", now + 10 + 15) is True       # +15s
+    assert c._allow("W1", now + 25 + 19) is False
+    assert c._allow("W1", now + 25 + 20) is True       # +20s
+
+
+def test_backoff_counter_resets_after_long_silence():
+    c, sent = _client(cooldown_seconds=5.0)
+    now = 1000.0
+    for _ in range(3):
+        assert c._allow("W1", now) is True
+        now += 100                                     # generous gaps: 3 alerts
+    now += c._BACKOFF_RESET_SECONDS                    # violation episode over
+    assert c._allow("W1", now) is True                 # fresh episode
+    assert c._allow("W1", now + 9) is False            # back to the 2x-base gap
+    assert c._allow("W1", now + 10) is True
 
 
 def test_disabled_client_sends_nothing():
@@ -192,3 +221,10 @@ def test_send_zone_alert_noop_without_endpoint():
     c, sent = _client()                       # no zone_endpoint configured
     c.send_zone_alert(_zone_event(), FRAME)
     assert sent == []
+
+
+def test_fall_sentinel_defaults_to_shared_anonymous_row():
+    # A fall must never be skipped for lack of identity: the config supplies
+    # the shared anonymous user row by default (overridable via env).
+    from config.settings import PipelineConfig
+    assert PipelineConfig().alert.fall_unidentified_user_id == "2678a"

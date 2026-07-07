@@ -41,6 +41,29 @@ class AlertClient:
         self.zone_unidentified_user_id = zone_unidentified_user_id
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
+        self._alert_count = {}
+
+    # A key silent this long starts a fresh episode (backoff counter resets).
+    _BACKOFF_RESET_SECONDS = 300.0
+
+    def _allow(self, key, now):
+        """Arithmetic backoff per alert key instead of a fixed cooldown.
+
+        The first alert goes immediately (upstream already gates on sustained
+        evidence); after k alerts the next needs a gap of
+        cooldown_seconds * (k + 1). With the 5s base that is 10s, then 15s,
+        then 20s, ... — an ongoing violation keeps notifying, but ever less
+        often instead of spamming at a fixed rate."""
+        count = self._alert_count.get(key, 0)
+        last = self._last_alert_time.get(key)
+        if last is not None:
+            if now - last >= self._BACKOFF_RESET_SECONDS:
+                count = 0
+            elif now - last < self.cooldown_seconds * (count + 1):
+                return False
+        self._last_alert_time[key] = now
+        self._alert_count[key] = count + 1
+        return True
 
     def send_ppe_alert(self, violation, frame):
         if not self.enabled:
@@ -58,12 +81,8 @@ class AlertClient:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             key = f"unknown_{cx // 50}_{cy // 50}"
 
-        now = time.time()
-        last = self._last_alert_time.get(key, 0)
-        if now - last < self.cooldown_seconds:
+        if not self._allow(key, time.time()):
             return
-
-        self._last_alert_time[key] = now
         self._executor.submit(self._post_alert, violation, frame)
 
     def send_wet_floor_alert(self, wf_event, frame):
@@ -75,12 +94,8 @@ class AlertClient:
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
         key = f"wet_floor_{cx // 50}_{cy // 50}"
 
-        now = time.time()
-        last = self._last_alert_time.get(key, 0)
-        if now - last < self.cooldown_seconds:
+        if not self._allow(key, time.time()):
             return
-
-        self._last_alert_time[key] = now
         self._executor.submit(self._post_wet_floor_alert, wf_event, frame)
 
     def _post_wet_floor_alert(self, wf_event, frame):
@@ -119,12 +134,8 @@ class AlertClient:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             key = f"zone_{zone_id}_unknown_{cx // 50}_{cy // 50}"
 
-        now = time.time()
-        last = self._last_alert_time.get(key, 0)
-        if now - last < self.cooldown_seconds:
+        if not self._allow(key, time.time()):
             return
-
-        self._last_alert_time[key] = now
         self._executor.submit(self._post_zone_alert, zone_event, frame)
 
     def _post_zone_alert(self, zone_event, frame):

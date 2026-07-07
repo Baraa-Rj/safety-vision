@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 class _ItemState:
     window: deque = field(default_factory=deque)
     alerted: bool = False
+    # True once a full window held strong present evidence — the item is
+    # reliably worn, so detection-dropout bursts get a higher alert bar.
+    established: bool = False
 
 
 @dataclass
@@ -68,8 +71,23 @@ class PPEComplianceTracker:
             if len(item_state.window) >= self.config.window_size:
                 missing = sum(1 for x in item_state.window if x == "missing")
                 present = sum(1 for x in item_state.window if x == "present")
-                if not item_state.alerted and missing >= self.config.missing_to_alert:
+                if not item_state.alerted and present >= self.config.present_to_establish:
+                    item_state.established = True
+                # An established item (a full window once showed it reliably
+                # worn) only alerts on PURE absence: the model drops worn
+                # helmets in multi-second bursts (measured: when it sees one
+                # at all, conf >= 0.35; misses emit nothing), so a partial
+                # window of misses is detector noise, not a removed helmet.
+                # A truly removed item reaches all-missing within one window
+                # anyway — the alert arrives 3 frames later, not never.
+                # Fresh tracks (never established) keep the 5-of-8 bar.
+                alert_bar = (
+                    len(item_state.window) if item_state.established
+                    else self.config.missing_to_alert
+                )
+                if not item_state.alerted and missing >= alert_bar:
                     item_state.alerted = True
+                    item_state.established = False
                     transition = "alert"
                     logger.debug(
                         "track=%s item=%s ALERT (missing=%d/%d window=%s)",

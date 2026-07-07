@@ -633,3 +633,115 @@ def test_process_frame_violation_with_qr(dummy_frame):
     assert v["worker_id"] == "W042"
     assert v["worker_name"] == "John Doe"
     assert v["qr_data"] == '{"id": "W042", "name": "John Doe"}'
+
+
+class StubFallPassthrough:
+    """Fall detector that reports one confirmed, alert-worthy fall."""
+
+    def __init__(self, track_id, bbox):
+        self.track_id = track_id
+        self.bbox = bbox
+
+    def detect(self, fallen_detections):
+        return [{"track_id": self.track_id, "bbox": list(self.bbox),
+                 "confidence": 0.9, "severity": "LOW",
+                 "still_seconds": 0.0, "alert": True}]
+
+
+def test_fall_recovers_identity_from_dying_person_track(dummy_frame):
+    """The 'fallen' YOLO class gets its own track id, so the QR identity
+    cached under the person track never matches directly. The fall must
+    adopt the identity of the person track that died where the fall is."""
+    from src.worker_id import WorkerIdentifier
+
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7, bbox=[40, 20, 140, 220])
+    identifier = WorkerIdentifier()
+    identifier._cache[7] = {
+        "result": {"qr_data": "W042", "worker_name": None, "worker_id": "W042"},
+        "timestamp": __import__("time").time(),
+    }
+    pipeline = _pipeline_with(detector, config, identifier=identifier)
+    pipeline.process_frame(dummy_frame)          # person track 7 seen + identified
+
+    # Worker goes down: person box gone, fallen box (fresh id 99) overlapping
+    # where they stood.
+    pipeline.ppe_detector = StubPPEDetector()
+    pipeline.fall_detector = StubFallPassthrough(99, [20, 120, 200, 230])
+    events = pipeline.process_frame(dummy_frame)
+    assert len(events["falls"]) == 1
+    assert events["falls"][0]["worker_id"] == "W042"
+
+    # The identity stays pinned even after the standing track's memory is
+    # pruned (a fall outlives the 5s track timeout).
+    pipeline._track_last_seen.clear()
+    events = pipeline.process_frame(dummy_frame)
+    assert events["falls"][0]["worker_id"] == "W042"
+
+
+def test_fall_without_nearby_identity_stays_anonymous(dummy_frame):
+    """No identified track anywhere near the fall: no identity is invented."""
+    config = PipelineConfig()
+    pipeline = _pipeline_with(StubPPEDetector(), config)
+    pipeline.fall_detector = StubFallPassthrough(99, [300, 300, 460, 380])
+    events = pipeline.process_frame(dummy_frame)
+    assert len(events["falls"]) == 1
+    assert events["falls"][0]["worker_id"] is None
+
+
+class TwoPersonPPE:
+    """One identified worker plus an overlapping phantom duplicate box."""
+
+    def __init__(self):
+        self.results = [
+            {"person_bbox": [40, 20, 140, 220], "track_id": 7,
+             "compliant": True, "detected_ppe": ["helmet", "vest"],
+             "missing_ppe": []},
+            {"person_bbox": [45, 30, 140, 220], "track_id": 8,
+             "compliant": False, "detected_ppe": [],
+             "missing_ppe": ["helmet", "vest"]},
+        ]
+
+    def detect(self, frame):
+        return [dict(r) for r in self.results]
+
+
+def test_phantom_duplicate_box_adopts_identity(dummy_frame):
+    """A duplicate tracker box on an identified worker must carry that
+    worker's identity — it used to alert as 'Unknown worker' while the
+    identified box stood in the same spot."""
+    from src.worker_id import WorkerIdentifier
+
+    config = PipelineConfig()
+    identifier = WorkerIdentifier()
+    identifier._cache[7] = {
+        "result": {"qr_data": "W042", "worker_name": None, "worker_id": "W042"},
+        "timestamp": __import__("time").time(),
+    }
+    pipeline = _pipeline_with(TwoPersonPPE(), config, identifier=identifier)
+    events = pipeline.process_frame(dummy_frame)
+    everyone = (events["ppe_violations"] + events["compliant_workers"]
+                + events["pending_workers"])
+    assert len(everyone) == 2
+    assert all(w["worker_id"] == "W042" for w in everyone)
+
+
+def test_separate_workers_do_not_adopt_identity(dummy_frame):
+    """Two workers standing apart: the unidentified one stays unidentified."""
+    from src.worker_id import WorkerIdentifier
+
+    config = PipelineConfig()
+    identifier = WorkerIdentifier()
+    identifier._cache[7] = {
+        "result": {"qr_data": "W042", "worker_name": None, "worker_id": "W042"},
+        "timestamp": __import__("time").time(),
+    }
+    detector = TwoPersonPPE()
+    detector.results[1]["person_bbox"] = [400, 30, 500, 230]   # far away
+    pipeline = _pipeline_with(detector, config, identifier=identifier)
+    events = pipeline.process_frame(dummy_frame)
+    everyone = (events["ppe_violations"] + events["compliant_workers"]
+                + events["pending_workers"])
+    by_track = {w["track_id"]: w for w in everyone}
+    assert by_track[7]["worker_id"] == "W042"
+    assert by_track[8]["worker_id"] is None

@@ -68,6 +68,13 @@ class SafetyPipeline:
         # Processed-frame counter: persistence windows use it as a floor so
         # they don't collapse to "one frame" when inference is slow.
         self._frame_counter = 0
+        # Identity recovered for an ongoing fall, keyed by the fall's own
+        # track/location key. The 'fallen' YOLO class gets a different track id
+        # than the person track that carried the QR identity, and the standing
+        # track's memory is pruned minutes before a long fall ends — so the
+        # identity is recovered spatially once and pinned here for the whole
+        # fall event. See _recover_fallen_identity.
+        self._fall_identities = {}
 
         wf_required = (
             wet_floor_detector.config.consecutive_frames_required
@@ -159,6 +166,67 @@ class SafetyPipeline:
             "bbox": bbox, "ts": now, "vel": vel, "frame": self._frame_counter,
         }
 
+    def _adopt_identity(self, bbox, ppe_results, identities):
+        """Identity for an unidentified person box that overlaps an identified
+        one. The tracker occasionally emits two person boxes for one worker
+        (phantom/duplicate); the duplicate has no QR cache, violates PPE by
+        definition of seeing half a body, and used to alert as "Unknown
+        worker" while the real, identified box stood right there. Overlap
+        must be substantial (IoU > 0.5) so two workers standing apart can
+        never adopt each other's identity."""
+        best, best_iou = None, 0.5
+        for other, identity in zip(ppe_results, identities):
+            if identity is None:
+                continue
+            iou = _iou(bbox, other["person_bbox"])
+            if iou > best_iou:
+                best, best_iou = identity, iou
+        return best
+
+    def _recover_fallen_identity(self, fall, now):
+        """Identity for a fallen worker whose own track id has no QR cache.
+
+        A worker falls where they were standing: their person track dies the
+        moment the detector swaps them to the 'fallen' class, but its last box
+        (in _track_last_seen) overlaps or abuts the fallen box. Take the
+        identified track with the best overlap (or, failing that, the nearest
+        one within a box dimension) and pin that identity to the fall's key so
+        it survives after the standing track's memory is pruned."""
+        bbox = fall["bbox"]
+        fkey = fall.get("track_id")
+        if fkey is None:
+            fkey = f"loc_{bbox[0] // 50}_{bbox[1] // 50}"
+
+        pinned = self._fall_identities.get(fkey)
+        if pinned is not None:
+            pinned["ts"] = now
+            return pinned["identity"]
+
+        timeout = self.config.compliance.track_timeout_seconds
+        cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+        reach = max(bbox[2] - bbox[0], bbox[3] - bbox[1], 1)
+        overlaps, nears = [], []
+        for tid, seen in self._track_last_seen.items():
+            if now - seen["ts"] > timeout:
+                continue
+            if self.worker_id.get_cached(tid) is None:
+                continue
+            iou = _iou(bbox, seen["bbox"])
+            sx1, sy1, sx2, sy2 = seen["bbox"]
+            dist = ((cx - (sx1 + sx2) / 2.0) ** 2
+                    + (cy - (sy1 + sy2) / 2.0) ** 2) ** 0.5
+            if iou > 0.1:
+                overlaps.append((iou, tid))
+            elif dist <= reach:
+                nears.append((-dist, tid))
+
+        candidates = overlaps or nears
+        if not candidates:
+            return None
+        identity = self.worker_id.get_cached(max(candidates)[1])
+        self._fall_identities[fkey] = {"identity": identity, "ts": now}
+        return identity
+
     def _resolve_display(self, track_id, bbox, now):
         """Displayed verdict for a tracked person: "violation", "ok", or None
         (still checking — rendered as nothing). Wraps get_display_state with a
@@ -230,9 +298,15 @@ class SafetyPipeline:
         if self.fall_detector:
             fallen_dets = getattr(self.ppe_detector, "fallen_detections", [])
             for fr in self.fall_detector.detect(fallen_dets):
-                # Best-effort identity: reuse the ID this track was scanned with
-                # while upright (their QR can't be read on the ground).
-                identity = self.worker_id.get_cached(fr.get("track_id"))
+                # Reuse the ID this worker was scanned with while upright
+                # (their QR can't be read on the ground). The fallen box's own
+                # track id almost never carries it — 'fallen' is a separate
+                # YOLO class, so the tracker assigns it a fresh id — so fall
+                # back to spatial recovery from the dying person track, pinned
+                # for the whole fall event.
+                identity = (self.worker_id.get_cached(fr.get("track_id"))
+                            or self._recover_fallen_identity(
+                                fr, events["timestamp"]))
                 events["falls"].append({
                     "worker_id": identity["worker_id"] if identity else None,
                     "worker_name": identity["worker_name"] if identity else None,
@@ -244,7 +318,12 @@ class SafetyPipeline:
                     "alert": fr.get("alert", False),
                 })
 
-        for i, result in enumerate(ppe_results):
+        # Identity pass first, for ALL persons: an unidentified box that sits
+        # on top of an identified one (tracker double-box / phantom on the
+        # same worker) adopts that identity, so alerts never report "Unknown
+        # worker" for someone whose QR was already scanned this run.
+        identities = []
+        for result in ppe_results:
             x1, y1, x2, y2 = result["person_bbox"]
             track_id = result.get("track_id")
             # Must run before identify(): a churned id inherits its QR identity
@@ -253,7 +332,17 @@ class SafetyPipeline:
                 self._resolve_track_continuity(
                     track_id, result["person_bbox"], events["timestamp"])
             person_crop = frame[y1:y2, x1:x2]
-            qr_result = self.worker_id.identify(person_crop, track_id=track_id)
+            identities.append(
+                self.worker_id.identify(person_crop, track_id=track_id))
+        for i, result in enumerate(ppe_results):
+            if identities[i] is None:
+                identities[i] = self._adopt_identity(
+                    result["person_bbox"], ppe_results, identities)
+
+        for i, result in enumerate(ppe_results):
+            x1, y1, x2, y2 = result["person_bbox"]
+            track_id = result.get("track_id")
+            qr_result = identities[i]
             worker_id = qr_result["worker_id"] if qr_result else None
             worker_name = qr_result["worker_name"] if qr_result else None
             qr_data = qr_result["qr_data"] if qr_result else None
@@ -398,6 +487,12 @@ class SafetyPipeline:
             self._track_last_seen = {
                 tid: s for tid, s in self._track_last_seen.items()
                 if events["timestamp"] - s["ts"] <= timeout
+            }
+            # Fall identities are refreshed every frame their fall is present;
+            # a minute of absence means the event is truly over.
+            self._fall_identities = {
+                k: v for k, v in self._fall_identities.items()
+                if events["timestamp"] - v["ts"] <= 60.0
             }
             self._compliance_cleanup_counter = 0
 

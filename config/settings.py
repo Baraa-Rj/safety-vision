@@ -99,7 +99,7 @@ class FallDetectionConfig:
     # No backend alert until a fall has persisted this long — filters brief
     # false positives (a stumble or quick crouch). The fall is still detected and
     # drawn on screen immediately; only the alert (POST) waits.
-    alert_delay_seconds: float = 5.0
+    alert_delay_seconds: float = 10.0
     still_motion_px: int = 15               # centroid move below this = "still"
     medium_seconds: float = 5.0             # on the ground this long -> MEDIUM
     high_still_seconds: float = 20.0        # motionless this long -> HIGH (urgent)
@@ -120,6 +120,14 @@ class ComplianceConfig:
     window_size: int = 8
     missing_to_alert: int = 5
     present_to_clear: int = 2
+    # A full window with this many present frames marks the item "established"
+    # (reliably worn). Established items only flip red on a fully-missing
+    # window: the helmet model's misses come in multi-second bursts on a worn
+    # helmet (measured: it emits either conf >= 0.35 or nothing — the
+    # 0.20-0.35 band is 0.5% of frames), and 5-of-8 flapped alert/clear on a
+    # compliant worker. A removed helmet still reaches all-missing within one
+    # window, so a genuine violation is delayed by 3 frames, not suppressed.
+    present_to_establish: int = 5
     # Minimum processed frames agreeing before a NEW track gets any on-screen
     # verdict at all; below this it renders as yellow "checking". Prevents both
     # failure modes seen live: defaulting green until the window fills (a
@@ -136,7 +144,7 @@ class ComplianceConfig:
     uncertain_upper: float = 0.35
     # A violation must be constant for this long before it's sent to the backend
     # — filters single-frame false pops.
-    confirm_seconds: float = 5.0
+    confirm_seconds: float = 10.0
 
 
 @dataclass
@@ -175,7 +183,11 @@ class DisplayConfig:
 class AlertConfig:
     endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
-    cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
+    # Backoff base per alert key: first alert immediate (violations are
+    # already 5s-confirmed upstream), then repeats at 2x, 3x, 4x... this gap
+    # (10s, 15s, 20s, ...) so an ongoing violation notifies with decreasing
+    # frequency instead of a fixed-rate stream.
+    cooldown_seconds: float = 5.0
     # Zone breach alerts have a dedicated endpoint + payload
     # ({imgImage, userId, zoneId, message}), so this is derived (not blank).
     zone_endpoint: str = field(default_factory=_zone_alert_endpoint)
@@ -191,11 +203,12 @@ class AlertConfig:
     # Falls have a dedicated endpoint + payload, so this is derived (not blank).
     fall_endpoint: str = field(default_factory=_fall_endpoint)
     # The fall endpoint requires a userId FK. A fallen worker often can't be
-    # identified, so anonymous falls are sent under this sentinel user id (a real
-    # row that must exist in the backend). Set FALL_UNIDENTIFIED_USER_ID; if
-    # blank, anonymous falls are skipped rather than POSTing a failing request.
+    # identified, so anonymous falls are sent under this sentinel user id (a
+    # real row that must exist in the backend). A fall is a critical event —
+    # it must NEVER be silently skipped — so this defaults to the same shared
+    # anonymous row the zone alerts use rather than blank.
     fall_unidentified_user_id: str = field(
-        default_factory=lambda: os.environ.get("FALL_UNIDENTIFIED_USER_ID", ""))
+        default_factory=lambda: os.environ.get("FALL_UNIDENTIFIED_USER_ID") or "2678a")
 
 
 @dataclass

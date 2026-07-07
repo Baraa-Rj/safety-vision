@@ -203,3 +203,51 @@ def test_display_state_defers_to_hysteresis_once_window_full():
     # All-missing window → alerted → red via the same call.
     _feed(tracker, 2, "helmet", [None] * 8)
     assert tracker.get_display_state(2)["helmet"] is True
+
+
+def test_established_item_survives_partial_miss_burst():
+    # A worker whose helmet was reliably seen (established) does NOT alert on
+    # a 5-of-8 miss burst — the model drops worn helmets in bursts; partial
+    # absence is detector noise, not a removed helmet.
+    cfg = ComplianceConfig(window_size=8, missing_to_alert=5,
+                           present_to_clear=2, present_to_establish=5)
+    tracker = PPEComplianceTracker(cfg, {"helmet"})
+    transitions = _feed(tracker, 1, "helmet", [0.9] * 8)     # establish
+    assert all(t is None for t in transitions)
+    burst = _feed(tracker, 1, "helmet", [None] * 5, ts_start=1010)
+    assert all(t is None for t in burst)                     # 5/8 missing: held
+    assert tracker.get_state(1)["helmet"] is False
+
+
+def test_established_item_alerts_on_pure_absence():
+    # A truly removed helmet reaches an all-missing window and still alerts.
+    cfg = ComplianceConfig(window_size=8, missing_to_alert=5,
+                           present_to_clear=2, present_to_establish=5)
+    tracker = PPEComplianceTracker(cfg, {"helmet"})
+    _feed(tracker, 1, "helmet", [0.9] * 8)                   # establish
+    gone = _feed(tracker, 1, "helmet", [None] * 8, ts_start=1010)
+    assert "alert" in gone
+    assert tracker.get_state(1)["helmet"] is True
+
+
+def test_fresh_track_still_alerts_at_missing_to_alert():
+    # A never-established track (bare head from frame one) keeps the 5-of-8 bar.
+    cfg = ComplianceConfig(window_size=8, missing_to_alert=5,
+                           present_to_clear=2, present_to_establish=5)
+    tracker = PPEComplianceTracker(cfg, {"helmet"})
+    seq = [0.9] * 3 + [None] * 5                             # fills window, 5 missing
+    transitions = _feed(tracker, 1, "helmet", seq)
+    assert transitions[-1] == "alert"
+
+
+def test_uncertain_sighting_blocks_established_alert():
+    # One sub-threshold glimpse inside the window means the head was not bare.
+    cfg = ComplianceConfig(window_size=8, missing_to_alert=5,
+                           present_to_clear=2, present_to_establish=5,
+                           uncertain_lower=0.25, uncertain_upper=0.35)
+    tracker = PPEComplianceTracker(cfg, {"helmet"})
+    _feed(tracker, 1, "helmet", [0.9] * 8)                   # establish
+    seq = [None] * 4 + [0.30] + [None] * 3                   # 7 missing, 1 uncertain
+    transitions = _feed(tracker, 1, "helmet", seq, ts_start=1010)
+    assert all(t is None for t in transitions)
+    assert tracker.get_state(1)["helmet"] is False
