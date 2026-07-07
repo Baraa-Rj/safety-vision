@@ -52,6 +52,14 @@ class SafetyPipeline:
         # config.compliance.confirm_seconds (filters single-frame false pops).
         self.violation_confirmer = ViolationConfirmer(config.compliance.confirm_seconds)
         self._compliance_cleanup_counter = 0
+        # Displayed verdict per track ("ok"/"violation" + last bbox/timestamp).
+        # This is what keeps the UI stable while a worker moves: BoT-SORT churns
+        # ids on fast motion (ReID is off) and each new id starts an empty
+        # evidence window, so without memory the display would drop back to
+        # Checking — or flash red off a few blurred frames — for a worker who
+        # was confirmed compliant a moment ago. See _resolve_display.
+        self._display_memory = {}
+        self._active_track_ids = set()
 
         wf_required = (
             wet_floor_detector.config.consecutive_frames_required
@@ -66,6 +74,7 @@ class SafetyPipeline:
             "ppe_violations": [],
             "confirmed_ppe_violations": [],
             "compliant_workers": [],
+            "pending_workers": [],
             "falls": [],
             "zone_breaches": [],
             "wet_floor_events": [],
@@ -75,11 +84,74 @@ class SafetyPipeline:
     def add_zone(self, zone_id, points):
         self.zone_monitor.add_zone(zone_id, points)
 
+    def _inherit_display_memory(self, bbox):
+        """BoT-SORT drops and re-creates a moving worker's track (ReID is off;
+        association is motion/IoU only), and the new id starts with an empty
+        evidence window — without this, every churn sent a compliant worker
+        back to Checking. Adopt the verdict of a recently-dead track whose last
+        box overlaps this one: same person, new id. Tracks still active this
+        frame are excluded so a new box next to a live worker can't steal
+        their state."""
+        best_id, best_iou = None, 0.3
+        for tid, mem in self._display_memory.items():
+            if tid in self._active_track_ids:
+                continue
+            iou = _iou(bbox, mem["bbox"])
+            if iou > best_iou:
+                best_id, best_iou = tid, iou
+        if best_id is None:
+            return None
+        return self._display_memory.pop(best_id)
+
+    def _resolve_display(self, track_id, bbox, now):
+        """Displayed verdict for a tracked person: "violation", "ok", or None
+        (still checking — rendered as nothing). Wraps get_display_state with a
+        per-worker memory so a verdict, once earned, survives the two things
+        that made the display flicker on moving workers: track-id churn (new
+        id = empty window = Checking) and short runs of missed vest/helmet
+        detections (3 blurred frames = red under the bare warm-up vote).
+        Downgrading a confirmed-compliant worker to red therefore always
+        requires full-window hysteresis evidence — the same bar a stable
+        track has — while a genuinely new worker still turns red after
+        display_min_evidence frames."""
+        dstate = self.compliance_tracker.get_display_state(track_id)
+        flagged = sorted(item for item, v in dstate.items() if v is True)
+        pending = any(v is None for v in dstate.values())
+
+        memory = self._display_memory.get(track_id)
+        if memory is None:
+            memory = self._inherit_display_memory(bbox)
+
+        if flagged:
+            window_full = all(
+                self.compliance_tracker.get_window_summary(track_id, item)["size"]
+                >= self.config.compliance.window_size
+                for item in self.required_items
+            )
+            if memory is not None and memory["verdict"] == "ok" and not window_full:
+                # Warm-up red on a worker already confirmed compliant: hold
+                # green until the window fills and hysteresis itself flags it.
+                verdict, missing = "ok", []
+            else:
+                verdict, missing = "violation", flagged
+        elif not pending:
+            verdict, missing = "ok", []
+        elif memory is not None:
+            verdict, missing = memory["verdict"], memory["missing"]
+        else:
+            return None, []
+
+        self._display_memory[track_id] = {
+            "verdict": verdict, "missing": missing, "bbox": bbox, "ts": now,
+        }
+        return verdict, missing
+
     def process_frame(self, frame):
         events = {
             "ppe_violations": [],
             "confirmed_ppe_violations": [],
             "compliant_workers": [],
+            "pending_workers": [],
             "falls": [],
             "zone_breaches": [],
             "wet_floor_events": [],
@@ -87,6 +159,9 @@ class SafetyPipeline:
         }
 
         ppe_results = self.ppe_detector.detect(frame)
+        self._active_track_ids = {
+            r.get("track_id") for r in ppe_results if r.get("track_id") is not None
+        }
 
         # Falls come straight from best.pt's 'fallen' class (surfaced by the PPE
         # detector), so they're independent of the upright-person boxes — a worker
@@ -157,20 +232,20 @@ class SafetyPipeline:
                 conf_key, is_violation, events["timestamp"],
             )
 
-            # On-screen red/green uses the SMOOTHED per-track verdict, not the raw
-            # frame. best.pt's vest/helmet detection flickers at this camera's
-            # distance, and a single dropped frame must not flip a compliant
-            # worker to red. PPEComplianceTracker only marks an item `alerted`
-            # after it's missing in missing_to_alert/window_size frames, and clears
-            # with hysteresis — so brief dropouts stay green. With no track to
-            # smooth on, fall back to the raw frame.
+            # On-screen state uses the SMOOTHED per-track verdict plus a
+            # per-worker memory (_resolve_display), never the raw frame —
+            # best.pt's vest/helmet detection flickers at this camera's
+            # distance and BoT-SORT churns track ids on fast motion. Checking
+            # (verdict None) is internal only: such workers go to
+            # pending_workers, which the renderer does not draw. With no track
+            # to smooth on, fall back to the raw frame.
+            display_pending = False
             if track_id is not None:
-                alerted = sorted(
-                    item for item, on
-                    in self.compliance_tracker.get_state(track_id).items() if on
-                )
-                display_violation = bool(alerted)
-                display_missing = alerted or result["missing_ppe"]
+                verdict, remembered_missing = self._resolve_display(
+                    track_id, result["person_bbox"], events["timestamp"])
+                display_violation = verdict == "violation"
+                display_missing = remembered_missing or result["missing_ppe"]
+                display_pending = verdict is None
             else:
                 display_violation = not result["compliant"]
                 display_missing = result["missing_ppe"]
@@ -185,6 +260,13 @@ class SafetyPipeline:
                     "missing": display_missing,
                     "detected": result["detected_ppe"],
                     "zone": zone,
+                })
+            elif display_pending:
+                events["pending_workers"].append({
+                    "worker_id": worker_id,
+                    "worker_name": worker_name,
+                    "track_id": track_id,
+                    "bbox": result["person_bbox"],
                 })
             else:
                 events["compliant_workers"].append({
@@ -225,6 +307,13 @@ class SafetyPipeline:
         if self._compliance_cleanup_counter >= _COMPLIANCE_CLEANUP_EVERY:
             self.compliance_tracker.cleanup_stale(current_ts=events["timestamp"])
             self.violation_confirmer.cleanup(events["timestamp"])
+            # Same timeout as the tracker: a verdict too old to inherit is
+            # a worker who actually left, not a churned id.
+            timeout = self.config.compliance.track_timeout_seconds
+            self._display_memory = {
+                tid: m for tid, m in self._display_memory.items()
+                if events["timestamp"] - m["ts"] <= timeout
+            }
             self._compliance_cleanup_counter = 0
 
         if self.wet_floor_detector is not None and self.wet_floor_detector.config.enabled:
@@ -299,6 +388,7 @@ class SafetyPipeline:
             has_detections = (
                 events["ppe_violations"] or
                 events["compliant_workers"] or
+                events["pending_workers"] or
                 events["falls"]
             )
             with self._events_lock:

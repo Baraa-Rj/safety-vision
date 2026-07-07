@@ -61,6 +61,13 @@ def _capture_post(monkeypatch):
         captured["json"] = json
 
         class _R:
+            status_code = 201
+            text = '{"alertId": "test"}'
+
+            @property
+            def url(self):
+                return url
+
             def raise_for_status(self):
                 pass
 

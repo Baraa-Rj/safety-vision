@@ -117,3 +117,63 @@ def test_update_returns_action_for_each_required_item():
     tracker = PPEComplianceTracker(cfg, {"helmet", "vest"})
     result = tracker.update(1, {"helmet": 0.9, "vest": None}, timestamp=1000.0)
     assert set(result.keys()) == {"helmet", "vest"}
+
+
+# --- get_display_state: three-valued on-screen verdict ---
+# True = missing (red), False = present (green), None = insufficient evidence
+# (yellow "checking"). A verdict during warm-up needs display_min_evidence
+# agreeing frames and a strict majority.
+
+def _display_cfg():
+    return ComplianceConfig(window_size=8, missing_to_alert=5,
+                            present_to_clear=2, display_min_evidence=3)
+
+
+def test_display_state_unknown_track_is_pending():
+    # No evidence at all → no verdict (never claim OK, never claim VIOLATION).
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    assert tracker.get_display_state(99)["helmet"] is None
+    assert tracker.get_state(99)["helmet"] is False
+
+
+def test_display_state_pending_below_min_evidence():
+    # 1-2 frames — whatever they say — is not enough for a verdict. This is
+    # what keeps a blurry entry frame or a phantom person box from flashing red.
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    _feed(tracker, 1, "helmet", [None, None])
+    assert tracker.get_display_state(1)["helmet"] is None
+    _feed(tracker, 2, "helmet", [0.9, 0.9])
+    assert tracker.get_display_state(2)["helmet"] is None
+
+
+def test_display_state_missing_after_min_evidence():
+    # A no-PPE worker turns red after display_min_evidence frames — long
+    # before the window fills (get_state stays False until it does).
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    _feed(tracker, 1, "helmet", [None] * 3)
+    assert tracker.get_display_state(1)["helmet"] is True
+    assert tracker.get_state(1)["helmet"] is False
+
+
+def test_display_state_present_after_min_evidence():
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    _feed(tracker, 1, "helmet", [0.9] * 3)
+    assert tracker.get_display_state(1)["helmet"] is False
+
+
+def test_display_state_mixed_warmup_stays_pending():
+    # Conflicting evidence with no strict majority winner → still no verdict.
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    _feed(tracker, 1, "helmet", [None, 0.9, None, 0.9])
+    assert tracker.get_display_state(1)["helmet"] is None
+
+
+def test_display_state_defers_to_hysteresis_once_window_full():
+    tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
+    # Full window, missing=4 < missing_to_alert=5 → never alerted → green.
+    _feed(tracker, 1, "helmet", [None, 0.9] * 4)
+    assert tracker.get_display_state(1)["helmet"] is False
+    assert tracker.get_state(1)["helmet"] is False
+    # All-missing window → alerted → red via the same call.
+    _feed(tracker, 2, "helmet", [None] * 8)
+    assert tracker.get_display_state(2)["helmet"] is True

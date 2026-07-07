@@ -96,6 +96,40 @@ class PPEComplianceTracker:
             for item in self.required_items
         }
 
+    def get_display_state(self, track_id):
+        """Per-item on-screen verdict: True = draw as missing, False = present,
+        None = not enough evidence for any verdict yet (render as "checking").
+
+        `get_state` is silent until the window fills, which is right for
+        backend alerts but fails open on screen: a worker entering the frame
+        with no PPE at all would be drawn green until window_size frames
+        accumulate — and again after every track-id churn. A bare first-frame
+        vote fails the other way: one blurry entry frame or a transient
+        phantom person box flashes VIOLATION. So during warm-up a verdict
+        needs display_min_evidence observations of the winning label AND a
+        strict majority; anything less stays None. Once the window has filled,
+        the hysteresis verdict takes over.
+        """
+        track_state = self._tracks.get(track_id)
+        state = {}
+        for item in self.required_items:
+            item_state = track_state.items.get(item) if track_state else None
+            if item_state is None or not item_state.window:
+                state[item] = None
+            elif len(item_state.window) >= self.config.window_size:
+                state[item] = item_state.alerted
+            else:
+                missing = sum(1 for x in item_state.window if x == "missing")
+                present = sum(1 for x in item_state.window if x == "present")
+                min_ev = self.config.display_min_evidence
+                if missing >= min_ev and missing > present:
+                    state[item] = True
+                elif present >= min_ev and present > missing:
+                    state[item] = False
+                else:
+                    state[item] = None
+        return state
+
     def get_window_summary(self, track_id, item):
         track_state = self._tracks.get(track_id)
         if track_state is None or item not in track_state.items:

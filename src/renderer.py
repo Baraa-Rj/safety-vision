@@ -17,6 +17,11 @@ class FrameRenderer:
             cv2.putText(display, f"W:{wid} OK", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+        # events["pending_workers"] (Checking state) is intentionally NOT
+        # drawn: it's internal evidence accumulation. Rendering it made every
+        # track churn / entry flash a yellow box; a worker with no verdict yet
+        # simply gets no annotation until one is earned.
+
         for violation in events["ppe_violations"]:
             x1, y1, x2, y2 = violation["bbox"]
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 0, 255), 2)

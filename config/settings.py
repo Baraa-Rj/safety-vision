@@ -34,7 +34,8 @@ def _fall_endpoint():
 
 
 def _wet_endpoint():
-    return os.environ.get("WET_ALERTS_ENDPOINT") or f"{_backend_base()}/api/wet/alert/create"
+    # Confirmed against the live OpenAPI spec: POST /api/wet-alert/create.
+    return os.environ.get("WET_ALERTS_ENDPOINT") or f"{_backend_base()}/api/wet-alert/create"
 
 
 def _zone_alert_endpoint():
@@ -115,6 +116,12 @@ class ComplianceConfig:
     window_size: int = 8
     missing_to_alert: int = 5
     present_to_clear: int = 2
+    # Minimum processed frames agreeing before a NEW track gets any on-screen
+    # verdict at all; below this it renders as yellow "checking". Prevents both
+    # failure modes seen live: defaulting green until the window fills (a
+    # no-PPE worker shown OK) and flashing red off a single blurry entry frame
+    # or a transient phantom person box (a compliant worker shown VIOLATION).
+    display_min_evidence: int = 3
     track_timeout_seconds: float = 5.0
     uncertain_lower: float = 0.25
     uncertain_upper: float = 0.40

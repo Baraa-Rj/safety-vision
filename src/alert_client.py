@@ -20,6 +20,13 @@ def _log_outgoing(url, payload):
     logger.info("[POST %s] %s", url, json.dumps(shown))
 
 
+def _log_response(response):
+    """Print what the server actually returned — status + body — so a 'sent'
+    that didn't persist (redirect, empty 200, silent reject) is visible."""
+    body = (response.text or "").replace("\n", " ")[:400]
+    logger.info("[RESP %s] %s -> %s", response.status_code, response.url, body)
+
+
 class AlertClient:
     def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
                  zone_endpoint="", wet_floor_endpoint="", fall_endpoint="",
@@ -89,6 +96,7 @@ class AlertClient:
 
             _log_outgoing(self.wet_floor_endpoint, payload)
             response = requests.post(self.wet_floor_endpoint, json=payload, timeout=10)
+            _log_response(response)
             response.raise_for_status()
             logger.info("[WET FLOOR ALERT SENT] bbox=%s", wf_event["bbox"])
         except Exception as e:
@@ -134,9 +142,17 @@ class AlertClient:
             who = worker_name or worker_id or "Unidentified worker"
             message = f"{who} entered restricted zone {zone_id}"
 
+            # Mark the breach on the photo so the alert clearly shows who/where —
+            # box the breaching worker and label the zone.
+            annotated = frame.copy()
+            x1, y1, x2, y2 = (int(v) for v in zone_event["bbox"])
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 165, 255), 3)
+            cv2.putText(annotated, f"ZONE BREACH: {zone_id}", (x1, max(y1 - 10, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+
             # Backend contract is exactly {imgImage, userId, zoneId, message}.
             # zoneId is the backend's integer zone id (threaded from zones.json).
-            _, buffer = cv2.imencode(".jpg", frame)
+            _, buffer = cv2.imencode(".jpg", annotated)
             payload = {
                 "imgImage": base64.b64encode(buffer).decode("utf-8"),
                 "userId": str(user_id),
@@ -146,6 +162,7 @@ class AlertClient:
 
             _log_outgoing(self.zone_endpoint, payload)
             response = requests.post(self.zone_endpoint, json=payload, timeout=10)
+            _log_response(response)
             response.raise_for_status()
             logger.info("[ZONE ALERT SENT] %s", message)
         except Exception as e:
@@ -189,6 +206,7 @@ class AlertClient:
 
             _log_outgoing(self.fall_endpoint, payload)
             response = requests.post(self.fall_endpoint, json=payload, timeout=10)
+            _log_response(response)
             response.raise_for_status()
             logger.info("[FALL ALERT SENT] %s", message)
         except Exception as e:
@@ -220,6 +238,7 @@ class AlertClient:
 
             _log_outgoing(self.endpoint, payload)
             response = requests.post(self.endpoint, json=payload, timeout=10)
+            _log_response(response)
             response.raise_for_status()
             logger.info("[ALERT SENT] %s", message)
         except Exception as e:

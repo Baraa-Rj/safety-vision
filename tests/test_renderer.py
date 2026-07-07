@@ -24,6 +24,7 @@ def test_draw_with_events(renderer, dummy_frame):
     original = dummy_frame.copy()
     events = {
         "compliant_workers": [{"bbox": [10, 10, 50, 50], "worker_id": 1}],
+        "pending_workers": [{"bbox": [210, 10, 250, 50], "worker_id": 3}],
         "ppe_violations": [{"bbox": [60, 60, 100, 100], "worker_id": 2, "missing": ["helmet"]}],
         "falls": [{"bbox": [110, 110, 150, 150]}],
         "zone_breaches": [{"bbox": [160, 160, 200, 200], "zone_id": "zone_a"}],
