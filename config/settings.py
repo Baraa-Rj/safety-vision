@@ -99,7 +99,7 @@ class FallDetectionConfig:
     # No backend alert until a fall has persisted this long — filters brief
     # false positives (a stumble or quick crouch). The fall is still detected and
     # drawn on screen immediately; only the alert (POST) waits.
-    alert_delay_seconds: float = 10.0
+    alert_delay_seconds: float = 5.0
     still_motion_px: int = 15               # centroid move below this = "still"
     medium_seconds: float = 5.0             # on the ground this long -> MEDIUM
     high_still_seconds: float = 20.0        # motionless this long -> HIGH (urgent)
@@ -136,7 +136,7 @@ class ComplianceConfig:
     uncertain_upper: float = 0.35
     # A violation must be constant for this long before it's sent to the backend
     # — filters single-frame false pops.
-    confirm_seconds: float = 15.0
+    confirm_seconds: float = 5.0
 
 
 @dataclass

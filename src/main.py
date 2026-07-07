@@ -68,6 +68,7 @@ if config.zone.enabled:
                 zone["zone_id"], zone["points"],
                 zone.get("allowed_workers"), radius=zone.get("radius", 0),
                 backend_id=zone.get("backend_id", 0),
+                frame_size=zone.get("frame_size"),
             )
         logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
     else:

@@ -206,3 +206,47 @@ def test_permitted_worker_no_zone_breach(dummy_frame):
     events = pipeline.process_frame(dummy_frame)
 
     assert len(events["zone_breaches"]) == 0
+
+
+def test_zone_rescaled_to_runtime_frame():
+    # Defined on the 704x576 substream, run on the 2880x1620 main stream:
+    # the polygon must scale up ~4x so the same physical spot still triggers.
+    zm = ZoneMonitor()
+    zm.add_zone("z", [[100, 100], [300, 100], [300, 300], [100, 300]],
+                frame_size=(704, 576))
+    zm.set_frame_size(2880, 1620)
+    # Center of the original zone, scaled to main-stream coords.
+    sx, sy = 2880 / 704, 1620 / 576
+    cx, cy = int(200 * sx), int(200 * sy)
+    assert zm.check_person([cx - 50, cy - 200, cx + 50, cy]) == "z"
+    # The unscaled center must no longer trigger (it now sits outside).
+    assert zm.check_person([150, 50, 250, 200]) is None
+
+
+def test_zone_without_frame_size_untouched():
+    zm = ZoneMonitor()
+    zm.add_zone("z", [[100, 100], [300, 100], [300, 300], [100, 300]])
+    zm.set_frame_size(2880, 1620)
+    assert zm.check_person([150, 100, 250, 250]) == "z"
+
+
+def test_zone_scaling_idempotent_and_matching_size_noop():
+    zm = ZoneMonitor()
+    zm.add_zone("z", [[100, 100], [300, 100], [300, 300], [100, 300]],
+                frame_size=(704, 576))
+    zm.set_frame_size(704, 576)      # same size as defined -> unchanged
+    assert zm.check_person([150, 100, 250, 250]) == "z"
+    zm.set_frame_size(704, 576)      # repeated call -> still fine
+    assert zm.check_person([150, 100, 250, 250]) == "z"
+
+
+def test_zone_radius_scales_with_frame():
+    zm = ZoneMonitor()
+    zm.add_zone("z", [[100, 100], [200, 100], [200, 200], [100, 200]],
+                radius=10, frame_size=(100, 100))
+    zm.set_frame_size(200, 200)      # 2x -> polygon [200..400], radius 20
+    assert zm.radii["z"] == 20.0
+    # Feet 15px outside the scaled edge: inside the scaled 20px keep-out.
+    assert zm.check_person([415, 250, 455, 400]) == "z"
+    # 30px outside: beyond the keep-out.
+    assert zm.check_person([430, 250, 470, 400]) is None

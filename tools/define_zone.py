@@ -104,8 +104,11 @@ def main():
             if len(points) < 3:
                 print("need at least 3 corners")
                 continue
+            # frame_size lets the pipeline rescale the polygon if the live
+            # stream runs at a different resolution than this capture.
             zone = {"zone_id": args.zone_id, "backend_id": args.backend_id,
-                    "points": points, "allowed_workers": []}
+                    "points": points, "allowed_workers": [],
+                    "frame_size": [w, h]}
             existing = []
             if args.append and os.path.exists(_ZONES_PATH):
                 existing = [z for z in json.load(open(_ZONES_PATH))

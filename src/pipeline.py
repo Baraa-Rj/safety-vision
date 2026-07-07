@@ -204,6 +204,10 @@ class SafetyPipeline:
 
     def process_frame(self, frame):
         self._frame_counter += 1
+        # Zones are saved in the coords of the frame they were drawn on; align
+        # them with the stream actually being processed (no-op after frame 1).
+        h, w = frame.shape[:2]
+        self.zone_monitor.set_frame_size(w, h)
         events = {
             "ppe_violations": [],
             "confirmed_ppe_violations": [],
