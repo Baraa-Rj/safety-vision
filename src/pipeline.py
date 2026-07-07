@@ -65,6 +65,9 @@ class SafetyPipeline:
         # that worker, and everything keyed by track id (QR identity, display
         # verdict) is carried over. See _resolve_track_continuity.
         self._track_last_seen = {}
+        # Processed-frame counter: persistence windows use it as a floor so
+        # they don't collapse to "one frame" when inference is slow.
+        self._frame_counter = 0
 
         wf_required = (
             wet_floor_detector.config.consecutive_frames_required
@@ -120,7 +123,10 @@ class SafetyPipeline:
                        0.6 * (cy - pcy) / dt + 0.4 * vel[1])
             else:
                 vel = (0.0, 0.0)   # gap too long — stale velocity misleads
-            self._track_last_seen[track_id] = {"bbox": bbox, "ts": now, "vel": vel}
+            self._track_last_seen[track_id] = {
+                "bbox": bbox, "ts": now, "vel": vel,
+                "frame": self._frame_counter,
+            }
             return
 
         timeout = self.config.compliance.track_timeout_seconds
@@ -149,7 +155,9 @@ class SafetyPipeline:
             vel = self._track_last_seen[best_id].get("vel", (0.0, 0.0))
             del self._track_last_seen[best_id]
 
-        self._track_last_seen[track_id] = {"bbox": bbox, "ts": now, "vel": vel}
+        self._track_last_seen[track_id] = {
+            "bbox": bbox, "ts": now, "vel": vel, "frame": self._frame_counter,
+        }
 
     def _resolve_display(self, track_id, bbox, now):
         """Displayed verdict for a tracked person: "violation", "ok", or None
@@ -195,6 +203,7 @@ class SafetyPipeline:
         return verdict, missing
 
     def process_frame(self, frame):
+        self._frame_counter += 1
         events = {
             "ppe_violations": [],
             "confirmed_ppe_violations": [],
@@ -412,6 +421,7 @@ class SafetyPipeline:
           leaves takes their box with them."""
         now = events["timestamp"]
         hold = self.config.display.box_hold_seconds
+        hold_frames = self.config.display.box_hold_frames
         current_boxes = [r["person_bbox"] for r in ppe_results]
         current_boxes += [
             f["bbox"] for f in getattr(self.ppe_detector, "fallen_detections", [])
@@ -425,7 +435,13 @@ class SafetyPipeline:
             return ((gcx - bcx) ** 2 + (gcy - bcy) ** 2) ** 0.5 <= reach
 
         for tid, seen in self._track_last_seen.items():
-            if tid in self._active_track_ids or now - seen["ts"] > hold:
+            if tid in self._active_track_ids:
+                continue
+            # Expired only when BOTH windows are exhausted: wall-clock for
+            # fast loops, processed frames for slow ones (CPU inference can
+            # make 1s of wall time a single frame).
+            if (now - seen["ts"] > hold
+                    and self._frame_counter - seen.get("frame", 0) > hold_frames):
                 continue
             memory = self._display_memory.get(tid)
             if memory is None:

@@ -392,11 +392,33 @@ def test_held_box_bridges_detection_dropout(dummy_frame):
     assert held[0]["bbox"] == [10, 10, 100, 200]
     assert held[0]["track_id"] == 7
 
-    # Past the hold window the ghost expires.
+    # Expiry needs BOTH windows exhausted: backdate the wall clock AND run
+    # past the processed-frame floor.
     pipeline._track_last_seen[7]["ts"] -= config.display.box_hold_seconds + 1
+    pipeline._track_last_seen[7]["frame"] -= config.display.box_hold_frames + 1
     events = pipeline.process_frame(dummy_frame)
     assert events["compliant_workers"] == []
     assert events["ppe_violations"] == []
+
+
+def test_held_box_survives_slow_loop_dropout(dummy_frame):
+    """CPU-slow loops process ~1 frame/s, so a seconds-based hold collapses
+    to one frame of tolerance. The processed-frame floor must keep the box
+    through a multi-frame dropout even when the wall clock says expired."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    pipeline = _pipeline_with(detector, config)
+    for _ in range(config.compliance.window_size):
+        pipeline.process_frame(dummy_frame)
+
+    detector.detect = lambda frame: []
+    # Simulate slow inference: wall clock far past box_hold_seconds...
+    pipeline._track_last_seen[7]["ts"] -= config.display.box_hold_seconds + 5
+    # ...but only within box_hold_frames processed frames of dropout.
+    for _ in range(config.display.box_hold_frames):
+        events = pipeline.process_frame(dummy_frame)
+        assert len(events["compliant_workers"]) == 1
+        assert events["compliant_workers"][0]["held"] is True
 
 
 def test_held_box_keeps_violation_verdict(dummy_frame):

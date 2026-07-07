@@ -164,6 +164,11 @@ class DisplayConfig:
     # Short enough that a worker who genuinely leaves doesn't haunt the frame,
     # and that a fast walker doesn't leave a trail of expired positions.
     box_hold_seconds: float = 1.0
+    # Processed-frame floor for the hold: on a CPU the detection loop can run
+    # at ~1 frame/s, making 1.0s of wall clock a single frame of tolerance —
+    # one dropout blanked the worker. The hold survives while EITHER window
+    # (seconds or processed frames) is still open.
+    box_hold_frames: int = 3
 
 
 @dataclass
