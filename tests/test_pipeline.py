@@ -203,15 +203,19 @@ class ConfigurablePPE:
         self.bbox = bbox or [10, 10, 100, 200]
         self.detected = ["helmet", "vest"]
         self.missing = []
+        self.ppe_confidences = None    # optionally simulate low-conf sightings
 
     def detect(self, frame):
-        return [{
+        result = {
             "person_bbox": list(self.bbox),
             "track_id": self.track_id,
             "compliant": not self.missing,
             "detected_ppe": list(self.detected),
             "missing_ppe": list(self.missing),
-        }]
+        }
+        if self.ppe_confidences is not None:
+            result["ppe_confidences"] = dict(self.ppe_confidences)
+        return [result]
 
 
 def _pipeline_with(detector, config, identifier=None, wet=None):
@@ -228,6 +232,35 @@ def _pipeline_with(detector, config, identifier=None, wet=None):
         alert_client=StubAlertClient(),
         wet_floor_detector=wet,
     )
+
+
+def test_compliant_worker_entry_never_shows_red(dummy_frame):
+    """The reported flow: worker appears, vest is only glimpsed at low
+    confidence for the first frames (half-visible, motion blur), then detects
+    cleanly. Must go checking -> green with NO red in between — low-conf
+    sightings are uncertain evidence, not 'missing' votes."""
+    config = PipelineConfig()
+    detector = ConfigurablePPE(track_id=7)
+    detector.detected = ["helmet"]
+    detector.missing = ["vest"]                              # raw: below threshold
+    detector.ppe_confidences = {"helmet": 0.9, "vest": 0.30}  # but glimpsed
+    pipeline = _pipeline_with(detector, config)
+
+    reds = []
+    for _ in range(3):
+        events = pipeline.process_frame(dummy_frame)
+        reds += events["ppe_violations"]
+    assert reds == []                       # entry frames: no false red
+
+    # Vest now detected properly -> green after the short validation period.
+    detector.detected = ["helmet", "vest"]
+    detector.missing = []
+    detector.ppe_confidences = {"helmet": 0.9, "vest": 0.85}
+    for _ in range(config.compliance.display_min_evidence):
+        events = pipeline.process_frame(dummy_frame)
+        reds += events["ppe_violations"]
+    assert reds == []
+    assert len(events["compliant_workers"]) == 1
 
 
 def test_track_id_churn_keeps_compliant_worker_green(dummy_frame):

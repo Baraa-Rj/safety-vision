@@ -168,6 +168,32 @@ def test_display_state_mixed_warmup_stays_pending():
     assert tracker.get_display_state(1)["helmet"] is None
 
 
+def test_display_state_any_sighting_blocks_fast_red():
+    # Warm-up red requires PURE absence. One present frame among the misses
+    # (the model saw the vest once) blocks the fast red — mixed entry
+    # evidence resolves via the full-window hysteresis instead.
+    tracker = PPEComplianceTracker(_display_cfg(), {"vest"})
+    _feed(tracker, 1, "vest", [None, 0.9, None, None])
+    assert tracker.get_display_state(1)["vest"] is None
+
+
+def test_display_state_uncertain_sighting_blocks_fast_red():
+    # A sub-threshold glimpse (0.30 -> uncertain band) is evidence against
+    # "missing" — enough to withhold the red verdict during warm-up.
+    tracker = PPEComplianceTracker(_display_cfg(), {"vest"})
+    _feed(tracker, 1, "vest", [0.30, None, None, None])
+    assert tracker.get_display_state(1)["vest"] is None
+
+
+def test_display_state_threshold_conf_counts_as_present():
+    # 0.35-0.40 used to fall in the uncertain band while the detector already
+    # counted it as detected; the bands are now aligned, so it accumulates
+    # toward green at full weight.
+    tracker = PPEComplianceTracker(ComplianceConfig(), {"vest"})
+    _feed(tracker, 1, "vest", [0.36] * 3)
+    assert tracker.get_display_state(1)["vest"] is False
+
+
 def test_display_state_defers_to_hysteresis_once_window_full():
     tracker = PPEComplianceTracker(_display_cfg(), {"helmet"})
     # Full window, missing=4 < missing_to_alert=5 → never alerted → green.
