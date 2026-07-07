@@ -206,9 +206,16 @@ class ZoneDefinition:
     radius: int = 0  # keep-out distance in px around the polygon (0 = containment)
 
 
+def _zones_enabled():
+    # ZONES_ENABLED=0 turns zone monitoring off for a single run without
+    # touching zones.json — used by the demo launcher so the restricted-zone
+    # polygon only appears in the zone-breach scenario.
+    return os.environ.get("ZONES_ENABLED", "1").lower() not in ("0", "false", "no")
+
+
 @dataclass
 class ZoneConfig:
-    enabled: bool = True                 # zone monitoring on (loads data/zones.json)
+    enabled: bool = field(default_factory=_zones_enabled)  # loads data/zones.json
     zones: List[ZoneDefinition] = field(default_factory=list)
     alert_enabled: bool = True
     cooldown_seconds: float = 30.0
