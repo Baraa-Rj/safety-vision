@@ -23,7 +23,7 @@ def _log_outgoing(url, payload):
 class AlertClient:
     def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
                  zone_endpoint="", wet_floor_endpoint="", fall_endpoint="",
-                 fall_unidentified_user_id=""):
+                 fall_unidentified_user_id="", zone_unidentified_user_id=""):
         self.endpoint = endpoint
         self.enabled = enabled
         self.cooldown_seconds = cooldown_seconds
@@ -31,6 +31,7 @@ class AlertClient:
         self.wet_floor_endpoint = wet_floor_endpoint
         self.fall_endpoint = fall_endpoint
         self.fall_unidentified_user_id = fall_unidentified_user_id
+        self.zone_unidentified_user_id = zone_unidentified_user_id
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
 
@@ -124,26 +125,24 @@ class AlertClient:
             worker_name = zone_event.get("worker_name")
             zone_id = zone_event.get("zone_id")
 
-            if worker_name:
-                message = f"Worker {worker_name} entered restricted zone {zone_id}"
-            elif worker_id:
-                message = f"Worker {worker_id} entered restricted zone {zone_id}"
-            else:
-                message = f"Unknown worker entered restricted zone {zone_id}"
+            # Always send — identified or not. userId is the worker's id if known,
+            # else the configured sentinel, else "" (the frame still shows who/where).
+            # If the backend rejects a blank userId FK, set ZONE_UNIDENTIFIED_USER_ID
+            # so anonymous breaches carry a valid id.
+            user_id = worker_id or self.zone_unidentified_user_id or ""
 
+            who = worker_name or worker_id or "Unidentified worker"
+            message = f"{who} entered restricted zone {zone_id}"
+
+            # Backend contract is exactly {imgImage, userId, zoneId, message}.
+            # zoneId is the backend's integer zone id (threaded from zones.json).
+            _, buffer = cv2.imencode(".jpg", frame)
             payload = {
-                "zoneId": zone_id,
+                "imgImage": base64.b64encode(buffer).decode("utf-8"),
+                "userId": str(user_id),
+                "zoneId": int(zone_event.get("zone_backend_id", 0)),
                 "message": message,
             }
-            if worker_id is not None:
-                # Identified worker: skip the frame to keep the payload small.
-                payload["userId"] = str(worker_id)
-            else:
-                # Unidentified worker: attach the frame for manual review.
-                _, buffer = cv2.imencode(".jpg", frame)
-                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
-            if worker_name is not None:
-                payload["workerName"] = worker_name
 
             _log_outgoing(self.zone_endpoint, payload)
             response = requests.post(self.zone_endpoint, json=payload, timeout=10)

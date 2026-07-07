@@ -66,6 +66,7 @@ if config.zone.enabled:
             zone_monitor.add_zone(
                 zone["zone_id"], zone["points"],
                 zone.get("allowed_workers"), radius=zone.get("radius", 0),
+                backend_id=zone.get("backend_id", 0),
             )
         logging.info(f"Loaded {len(zones_data)} zone(s) from {zones_path}")
     else:
@@ -84,6 +85,7 @@ alert_client = AlertClient(
     wet_floor_endpoint=config.alert.wet_floor_endpoint,
     fall_endpoint=config.alert.fall_endpoint,
     fall_unidentified_user_id=config.alert.fall_unidentified_user_id,
+    zone_unidentified_user_id=config.alert.zone_unidentified_user_id,
 ) if config.alert.enabled else None
 
 pipeline = SafetyPipeline(

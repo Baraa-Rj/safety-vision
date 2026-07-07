@@ -37,6 +37,12 @@ def _wet_endpoint():
     return os.environ.get("WET_ALERTS_ENDPOINT") or f"{_backend_base()}/api/wet/alert/create"
 
 
+def _zone_alert_endpoint():
+    # Breach alerts (distinct from _zones_endpoint, which uploads zone shapes).
+    # Confirmed against the live OpenAPI spec: POST /api/zone-alerts/create.
+    return os.environ.get("ZONE_ALERTS_ENDPOINT") or f"{_backend_base()}/api/zone-alerts/create"
+
+
 @dataclass
 class CameraConfig:
     source: str = field(default_factory=_camera_source)
@@ -137,9 +143,15 @@ class AlertConfig:
     endpoint: str = field(default_factory=_ppe_endpoint)
     enabled: bool = True
     cooldown_seconds: float = 60.0          # 1 min per worker — don't alert every frame
-    # Zone alerts POST a different payload shape; leave blank to disable so they
-    # never hit the PPE endpoint with the wrong body.
-    zone_endpoint: str = ""
+    # Zone breach alerts have a dedicated endpoint + payload
+    # ({imgImage, userId, zoneId, message}), so this is derived (not blank).
+    zone_endpoint: str = field(default_factory=_zone_alert_endpoint)
+    # Breaching workers are often not QR-identified, but the endpoint requires a
+    # valid userId FK (a blank one returns 500). So anonymous breaches are sent
+    # under this sentinel — a real user row — which defaults to the shared
+    # "2678a" anonymous id and is overridable via ZONE_UNIDENTIFIED_USER_ID.
+    zone_unidentified_user_id: str = field(
+        default_factory=lambda: os.environ.get("ZONE_UNIDENTIFIED_USER_ID") or "2678a")
     # Wet floor has a dedicated endpoint + payload ({description, imgImage}), so
     # this is derived (not blank) — same rationale as fall_endpoint below.
     wet_floor_endpoint: str = field(default_factory=_wet_endpoint)

@@ -55,6 +55,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", help="define from a saved frame instead of the camera")
     ap.add_argument("--zone-id", default="restricted_1")
+    ap.add_argument("--backend-id", type=int, default=0,
+                    help="the server's integer id for this zone (sent as zoneId in alerts)")
     ap.add_argument("--append", action="store_true",
                     help="add to existing zones.json instead of replacing it")
     args = ap.parse_args()
@@ -102,7 +104,8 @@ def main():
             if len(points) < 3:
                 print("need at least 3 corners")
                 continue
-            zone = {"zone_id": args.zone_id, "points": points, "allowed_workers": []}
+            zone = {"zone_id": args.zone_id, "backend_id": args.backend_id,
+                    "points": points, "allowed_workers": []}
             existing = []
             if args.append and os.path.exists(_ZONES_PATH):
                 existing = [z for z in json.load(open(_ZONES_PATH))

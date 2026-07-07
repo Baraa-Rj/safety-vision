@@ -215,6 +215,7 @@ class SafetyPipeline:
                     "track_id": track_id,
                     "bbox": result["person_bbox"],
                     "zone_id": zone,
+                    "zone_backend_id": self.zone_monitor.backend_ids.get(zone, 0),
                 })
 
         active_ids = [r.get("track_id") for r in ppe_results if r.get("track_id") is not None]

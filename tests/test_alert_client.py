@@ -137,3 +137,51 @@ def test_send_wet_floor_alert_noop_without_endpoint():
     c, sent = _client()                       # no wet_floor_endpoint configured
     c.send_wet_floor_alert(_wf_event(), FRAME)
     assert sent == []
+
+
+# --- zone alerts ---
+
+def _zone_event(worker_id="W7", backend_id=3):
+    return {"worker_id": worker_id, "worker_name": None, "track_id": 1,
+            "bbox": [0, 0, 10, 10], "zone_id": "restricted_1",
+            "zone_backend_id": backend_id}
+
+
+def test_zone_alert_payload_shape_identified(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    zone_endpoint="http://x/api/zone/alert/create")
+    c._post_zone_alert(_zone_event(worker_id="W7", backend_id=3), FRAME)
+
+    p = captured["json"]
+    assert set(p.keys()) == {"imgImage", "userId", "zoneId", "message"}
+    assert p["userId"] == "W7"
+    assert p["zoneId"] == 3 and isinstance(p["zoneId"], int)
+    assert p["imgImage"]                       # zone alerts always attach the frame
+    assert captured["url"] == "http://x/api/zone/alert/create"
+
+
+def test_zone_alert_unidentified_uses_sentinel(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    zone_endpoint="http://x/api/zone/alert/create",
+                    zone_unidentified_user_id="UNKNOWN-1")
+    c._post_zone_alert(_zone_event(worker_id=None), FRAME)
+    assert captured["json"]["userId"] == "UNKNOWN-1"
+
+
+def test_zone_alert_unidentified_no_sentinel_sends_blank_user(monkeypatch):
+    # Zone breaches always send, identified or not; with no worker and no
+    # sentinel, userId is blank but the alert (with image) still goes out.
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/ppe", enabled=True,
+                    zone_endpoint="http://x/api/zone/alert/create")
+    c._post_zone_alert(_zone_event(worker_id=None), FRAME)
+    assert captured["json"]["userId"] == ""
+    assert captured["json"]["imgImage"]
+
+
+def test_send_zone_alert_noop_without_endpoint():
+    c, sent = _client()                       # no zone_endpoint configured
+    c.send_zone_alert(_zone_event(), FRAME)
+    assert sent == []
