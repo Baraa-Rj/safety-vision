@@ -200,6 +200,10 @@ class AlertConfig:
     # Wet floor has a dedicated endpoint + payload ({description, imgImage}), so
     # this is derived (not blank) — same rationale as fall_endpoint below.
     wet_floor_endpoint: str = field(default_factory=_wet_endpoint)
+    # Wet-floor cadence: first alert once the spill has persisted this long,
+    # then backoff repeats at 2x, 3x... the base (20s, 30s, 40s, ...).
+    wet_floor_first_alert_seconds: float = 10.0
+    wet_floor_cooldown_seconds: float = 10.0
     # Falls have a dedicated endpoint + payload, so this is derived (not blank).
     fall_endpoint: str = field(default_factory=_fall_endpoint)
     # The fall endpoint requires a userId FK. A fallen worker often can't be

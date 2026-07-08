@@ -10,6 +10,21 @@ import requests
 logger = logging.getLogger("safety_vision")
 
 
+def _same_spill(box_a, box_b):
+    """Two wet-floor boxes are the same spill if they overlap or their
+    centers sit within the larger box dimension of each other."""
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    if ix2 > ix1 and iy2 > iy1:
+        return True
+    acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+    bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+    reach = max(ax2 - ax1, ay2 - ay1, bx2 - bx1, by2 - by1, 1)
+    return ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5 <= reach
+
+
 def _log_outgoing(url, payload):
     """Print the request we're about to send, with the base64 image shortened
     so the terminal stays readable."""
@@ -30,10 +45,14 @@ def _log_response(response):
 class AlertClient:
     def __init__(self, endpoint, enabled=True, cooldown_seconds=30.0,
                  zone_endpoint="", wet_floor_endpoint="", fall_endpoint="",
-                 fall_unidentified_user_id="", zone_unidentified_user_id=""):
+                 fall_unidentified_user_id="", zone_unidentified_user_id="",
+                 wet_floor_first_alert_seconds=10.0,
+                 wet_floor_cooldown_seconds=10.0):
         self.endpoint = endpoint
         self.enabled = enabled
         self.cooldown_seconds = cooldown_seconds
+        self.wet_floor_first_alert_seconds = wet_floor_first_alert_seconds
+        self.wet_floor_cooldown_seconds = wet_floor_cooldown_seconds
         self.zone_endpoint = zone_endpoint
         self.wet_floor_endpoint = wet_floor_endpoint
         self.fall_endpoint = fall_endpoint
@@ -42,24 +61,28 @@ class AlertClient:
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._last_alert_time = {}
         self._alert_count = {}
+        self._wet_spills = {}   # backoff key -> last bbox of that spill
 
     # A key silent this long starts a fresh episode (backoff counter resets).
     _BACKOFF_RESET_SECONDS = 300.0
 
-    def _allow(self, key, now):
+    def _allow(self, key, now, base=None):
         """Arithmetic backoff per alert key instead of a fixed cooldown.
 
         The first alert goes immediately (upstream already gates on sustained
-        evidence); after k alerts the next needs a gap of
-        cooldown_seconds * (k + 1). With the 5s base that is 10s, then 15s,
-        then 20s, ... — an ongoing violation keeps notifying, but ever less
-        often instead of spamming at a fixed rate."""
+        evidence); after k alerts the next needs a gap of base * (k + 1) —
+        with an 8s base that is 16s, then 24s, then 32s, ... — so an ongoing
+        violation keeps notifying, but ever less often instead of spamming at
+        a fixed rate. `base` defaults to cooldown_seconds; alert types with
+        their own cadence (wet floor) pass theirs."""
+        if base is None:
+            base = self.cooldown_seconds
         count = self._alert_count.get(key, 0)
         last = self._last_alert_time.get(key)
         if last is not None:
             if now - last >= self._BACKOFF_RESET_SECONDS:
                 count = 0
-            elif now - last < self.cooldown_seconds * (count + 1):
+            elif now - last < base * (count + 1):
                 return False
         self._last_alert_time[key] = now
         self._alert_count[key] = count + 1
@@ -89,14 +112,32 @@ class AlertClient:
         if not self.enabled or not self.wet_floor_endpoint:
             return
 
-        # Bucket centroid so jittery bboxes share a cooldown key.
-        x1, y1, x2, y2 = wf_event["bbox"]
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        key = f"wet_floor_{cx // 50}_{cy // 50}"
+        # One backoff key per physical spill, matched by overlap/proximity.
+        # The old 50px centroid grid minted a fresh key whenever segmentation
+        # jitter nudged the centroid across a cell line — each "new" spill
+        # got an immediate first alert (3 alerts in seconds, observed live).
+        key = self._wet_key(wf_event["bbox"])
 
-        if not self._allow(key, time.time()):
+        now = time.time()
+        # First alert waits until the spill has persisted — the 5-frame streak
+        # confirms it's real, this confirms it's not a transient glisten.
+        first_seen = wf_event.get("first_seen_ts")
+        if (first_seen is not None
+                and now - first_seen < self.wet_floor_first_alert_seconds):
+            return
+        if not self._allow(key, now, base=self.wet_floor_cooldown_seconds):
             return
         self._executor.submit(self._post_wet_floor_alert, wf_event, frame)
+
+    def _wet_key(self, bbox):
+        """Stable backoff key for the spill this bbox belongs to."""
+        for key, prev in self._wet_spills.items():
+            if _same_spill(bbox, prev):
+                self._wet_spills[key] = bbox   # follow the spill's drift
+                return key
+        key = f"wet_floor_{len(self._wet_spills)}"
+        self._wet_spills[key] = bbox
+        return key
 
     def _post_wet_floor_alert(self, wf_event, frame):
         try:
@@ -233,19 +274,17 @@ class AlertClient:
             else:
                 message = f"Unknown worker missing {missing}"
 
+            # Every alert carries the frame — visual evidence lets a supervisor
+            # verify the violation without trusting the detector — plus the
+            # userId when the worker is identified.
+            _, buffer = cv2.imencode(".jpg", frame)
             payload = {
                 "missingItem": missing,
                 "message": message,
+                "imgImage": base64.b64encode(buffer).decode("utf-8"),
             }
             if worker_id is not None:
-                # Identified worker: backend already knows who they are, so the
-                # frame adds no value — skip it to keep the payload small.
                 payload["userId"] = str(worker_id)
-            else:
-                # Unidentified worker: attach the frame so the violation can be
-                # reviewed manually.
-                _, buffer = cv2.imencode(".jpg", frame)
-                payload["imgImage"] = base64.b64encode(buffer).decode("utf-8")
 
             _log_outgoing(self.endpoint, payload)
             response = requests.post(self.endpoint, json=payload, timeout=10)

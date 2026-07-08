@@ -228,3 +228,93 @@ def test_fall_sentinel_defaults_to_shared_anonymous_row():
     # the shared anonymous user row by default (overridable via env).
     from config.settings import PipelineConfig
     assert PipelineConfig().alert.fall_unidentified_user_id == "2678a"
+
+
+def _wet_event(first_seen_ts=None):
+    e = {"bbox": [100, 100, 200, 160], "confidence": 0.93, "area_pct": 0.3,
+         "consecutive_count": 5}
+    if first_seen_ts is not None:
+        e["first_seen_ts"] = first_seen_ts
+    return e
+
+
+def test_wet_floor_first_alert_waits_for_persistence():
+    import time as _time
+    c, sent = _client(wet_floor_first_alert_seconds=10.0)
+    c.wet_floor_endpoint = "http://x/api/wet-alert/create"
+    c.send_wet_floor_alert(_wet_event(first_seen_ts=_time.time() - 3), FRAME)
+    assert sent == []                                     # only 3s old: wait
+    c.send_wet_floor_alert(_wet_event(first_seen_ts=_time.time() - 11), FRAME)
+    assert len(sent) == 1                                 # persisted 10s: send
+
+
+def test_wet_floor_backoff_uses_wet_base():
+    import time as _time
+    c, sent = _client(cooldown_seconds=8.0, wet_floor_first_alert_seconds=10.0,
+                      wet_floor_cooldown_seconds=10.0)
+    c.wet_floor_endpoint = "http://x/api/wet-alert/create"
+    old = _time.time() - 60
+    c.send_wet_floor_alert(_wet_event(first_seen_ts=old), FRAME)
+    assert len(sent) == 1
+    key = next(iter(c._last_alert_time))
+    c._last_alert_time[key] -= 19.0                       # 19s elapsed < 2x10s
+    c.send_wet_floor_alert(_wet_event(first_seen_ts=old), FRAME)
+    assert len(sent) == 1
+    c._last_alert_time[key] -= 1.0                        # 20s elapsed
+    c.send_wet_floor_alert(_wet_event(first_seen_ts=old), FRAME)
+    assert len(sent) == 2
+
+
+def test_jittered_wet_bboxes_share_one_backoff_key():
+    # The exact boxes from the live triple-alert: centroid crossed two 50px
+    # grid lines, but all three are the same spill and must share one key.
+    import time as _time
+    c, sent = _client(wet_floor_first_alert_seconds=10.0,
+                      wet_floor_cooldown_seconds=10.0)
+    c.wet_floor_endpoint = "http://x/api/wet-alert/create"
+    old = _time.time() - 60
+    for bbox in ([1418, 1434, 1779, 1514],
+                 [1421, 1433, 1779, 1513],
+                 [1521, 1433, 1785, 1513]):
+        e = _wet_event(first_seen_ts=old)
+        e["bbox"] = bbox
+        c.send_wet_floor_alert(e, FRAME)
+    assert len(sent) == 1
+    assert len(c._wet_spills) == 1
+
+
+def test_distinct_spills_get_distinct_keys():
+    import time as _time
+    c, sent = _client(wet_floor_first_alert_seconds=10.0,
+                      wet_floor_cooldown_seconds=10.0)
+    c.wet_floor_endpoint = "http://x/api/wet-alert/create"
+    old = _time.time() - 60
+    for bbox in ([100, 100, 300, 200], [2000, 1200, 2300, 1400]):
+        e = _wet_event(first_seen_ts=old)
+        e["bbox"] = bbox
+        c.send_wet_floor_alert(e, FRAME)
+    assert len(sent) == 2
+    assert len(c._wet_spills) == 2
+
+
+def test_ppe_alert_identified_carries_image_and_user_id(monkeypatch):
+    # Every PPE alert attaches the frame as visual evidence; identified
+    # workers additionally carry their userId.
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/api/ppe-alerts/create", enabled=True)
+    c._post_alert(_violation(worker_id="W42"), FRAME)
+
+    p = captured["json"]
+    assert set(p.keys()) == {"missingItem", "message", "imgImage", "userId"}
+    assert p["userId"] == "W42"
+    assert p["imgImage"]
+
+
+def test_ppe_alert_unidentified_carries_image_without_user_id(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    c = AlertClient("http://x/api/ppe-alerts/create", enabled=True)
+    c._post_alert(_violation(worker_id=None), FRAME)
+
+    p = captured["json"]
+    assert set(p.keys()) == {"missingItem", "message", "imgImage"}
+    assert p["imgImage"]
