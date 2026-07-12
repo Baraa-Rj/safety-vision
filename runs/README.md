@@ -20,8 +20,32 @@ yolo detect val model=models/best.pt data=runs/_dataset/ppe4_reindexed_data.yaml
 
 Per-class P/R/mAP for helmet, person, vest are in each run's curves and
 confusion matrix. **The `fallen` class has ZERO ground truth in this set, so
-fallen-class detection recall and FPR are NOT measured by these runs.** No
-fallen-labelled detection validation set exists in this repo.
+fallen-class detection recall and FPR are NOT measured by these runs.** For
+fallen-class metrics see `detect/fall4_val_640` / `detect/fall4_test_640` below.
+
+## detect/fall4_val_640, detect/fall4_test_640 — `models/best.pt` (fallen class)
+Fall detection on the held-out splits of the 1,056-image 4-class fall dataset
+(`falling.yolo26(1).zip` at the repo root — Roboflow `chestx-ibk9e/falling-s0blr`,
+CC BY 4.0; same class namespace as `best.pt`: fallen/helmet/person/vest;
+739/211/106 train/valid/test). Extract the zip, point a data yaml at it
+(nc=4, names as above), then:
+
+```
+yolo detect val model=models/best.pt data=<fall4_data.yaml> split=val  imgsz=640 plots=True
+yolo detect val model=models/best.pt data=<fall4_data.yaml> split=test imgsz=640 plots=True
+```
+
+Fallen-class results (imgsz=640, CPU):
+
+| split | images w/ fallen | fallen inst. | P | R | mAP50 | mAP50-95 |
+|-------|------------------|--------------|-------|-------|-------|----------|
+| val   | 87               | 107          | 0.943 | 0.929 | 0.975 | 0.898 |
+| test  | 42               | 48           | 0.979 | 0.993 | 0.994 | 0.912 |
+
+Caveats: (1) valid/test frames come from the same recording sessions as
+training frames (Roboflow frame-level split of shared videos), so these are
+in-distribution numbers — on-site footage validation is still pending;
+(2) the dataset mixes polygon and box labels; Ultralytics used boxes only.
 
 ## classify/fall_cls_val_224 — `models/fall_cls.pt` (V4, proxy only)
 Fall **classifier** (NOT loaded by the pipeline) on `data/crops/val`. imgsz=224.

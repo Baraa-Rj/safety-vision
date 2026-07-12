@@ -13,9 +13,11 @@ violations pushed to a backend over HTTP.
   cached across frames via a persistent tracker so identity survives movement.
 - **Zone monitoring** — polygon geofences raise a breach when an unauthorised worker
   enters (disabled by default; enable in `config/settings.py`).
-- **Fall detection** — two-stage: the PPE detector supplies a person crop, a small
-  `fallen / standing` image classifier judges it, and a fall is reported only after the
-  `fallen` class is sustained for several frames on the same track.
+- **Fall detection** — the detector has a dedicated `fallen` class, so a worker on the
+  ground is detected directly (no crop, no separate classifier). A fall is reported only
+  after `fallen` is sustained for several consecutive frames on the same track, with
+  box-geometry checks and severity that escalates (LOW → MEDIUM → HIGH) while the worker
+  stays down.
 - **Alerts** — PPE, zone, and fall events POST to a backend. Identified workers send only
   their ID; unidentified workers attach the frame for review. Each event type has its own
   endpoint and is cooldown-gated so the backend isn't spammed.
@@ -24,7 +26,7 @@ violations pushed to a backend over HTTP.
 
 ```
 camera ─▶ PPEDetector ─┬─▶ WorkerIdentifier (QR)
-   │                   ├─▶ FallDetector (crop ─▶ classifier)
+   │                   ├─▶ FallDetector (fallen-class gate)
    │                   ├─▶ ZoneMonitor
    │                   └─▶ ComplianceTracker / ViolationConfirmer
    ▼
@@ -59,8 +61,8 @@ cp .env.example .env        # then edit .env with your values
 
 Model weights are not tracked in git. Place them in `models/`:
 
-- `models/best.pt` — PPE detector (helmet, vest, person)
-- `models/fall_cls.pt` — fall classifier (fallen, standing)
+- `models/best.pt` — detector (helmet, person, vest, fallen); drives both PPE compliance
+  and fall detection
 
 ### Configuration
 
