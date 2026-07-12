@@ -3,6 +3,34 @@
 Generated with `ultralytics` 8.4.33 on CPU. These are the only formal accuracy
 artifacts in the repo. Re-create with the commands below.
 
+> **LEAKAGE NOTICE (2026-07-12).** Source-frame comparison (filenames stripped
+> of Roboflow hashes, pixel-verified identical) showed that **all 33 valid and
+> all 18 test images of `data/ppe_dataset/` also appear in the 169-image
+> fine-tune training set** (and 22/13 of them in the fall train split). Since
+> `models/best.pt` is the fine-tuned model, the `ppe_val_640` / `ppe_test_640`
+> numbers below are **train-set performance, not held-out accuracy**. The
+> `fall4_*` runs are also mildly affected (35/211 valid and 16/106 test frames
+> leak). The authoritative held-out numbers are **`detect/clean_heldout_640`**.
+
+## detect/clean_heldout_640 — `models/best.pt` (AUTHORITATIVE held-out eval)
+Fall-dataset valid+test frames minus every frame whose source key appears in
+any local training pool (fall train, local ppe train, fine-tune train) and
+minus all `training*`-session frames (those sessions fed the published PPE
+train split, which cannot be checked locally). 266 images, 760 instances,
+deduped by source frame. imgsz=640.
+
+| class  | instances | P     | R     | mAP50 | mAP50-95 |
+|--------|-----------|-------|-------|-------|----------|
+| fallen | 155       | 0.963 | 0.929 | 0.980 | 0.901 |
+| helmet | 136       | 0.962 | 0.941 | 0.977 | 0.899 |
+| person | 241       | 0.994 | 0.983 | 0.995 | 0.978 |
+| vest   | 228       | 0.985 | 0.952 | 0.992 | 0.953 |
+| **all**| **760**   | 0.976 | 0.951 | **0.986** | 0.933 |
+
+Remaining caveat: clean frames still come from the same recorded sessions as
+fall-train footage (frame-level split of shared videos) — on-site validation
+is still pending.
+
 ## detect/ppe_val_640, detect/ppe_test_640 — `models/best.pt` (V1)
 PPE detection on the only labelled detection set in the repo
 (`data/ppe_dataset/`, re-indexed to `best.pt`'s 4-class namespace —
