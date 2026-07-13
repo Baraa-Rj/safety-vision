@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
-_DEFAULT_CAMERA_SOURCE = "data/sample_videos/full-vest-with-QR.mp4"
+_DEFAULT_CAMERA_SOURCE = "data/sample_videos/0712.mp4"
 
 
 def _camera_source():
