@@ -166,6 +166,12 @@ class WetFloorConfig:
 class DisplayConfig:
     max_display_width: int = 960
     window_name: str = "Safety Vision"
+    # Fullscreen display window. The frame is handed to the window at full
+    # resolution and scaled by the GUI, so max_display_width only applies to
+    # the windowed (fullscreen=False) mode. Toggle off with FULLSCREEN=0.
+    fullscreen: bool = field(
+        default_factory=lambda: os.environ.get(
+            "FULLSCREEN", "1").lower() not in ("0", "false", "no"))
     # A tracked worker whose detection drops out keeps their last box (and
     # verdict) on screen for this long — bridges blur/pose/occlusion dropouts
     # so rectangles don't flicker off while the worker is clearly still there.

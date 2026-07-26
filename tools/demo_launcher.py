@@ -51,7 +51,7 @@ _CLIPS = "/home/dark/ppe_finetune_dataset/drive_folder/records from camira"
 # with ZONES_ENABLED=0 so no zone is drawn or checked.
 SCENARIOS = [
     ("PPE Violations", "مخالفات معدات الحماية",
-     f"{_CLIPS}/001-20260707220200355.mp4", (217, 119, 6), False),   # amber
+     f"{_ROOT}/data/sample_videos/0712.mp4", (217, 119, 6), False),  # amber
     ("Fall Detection", "كشف السقوط",
      f"{_CLIPS}/001-20260707222316677.mp4", (220, 38, 38), False),   # red
     ("Zone Breach", "اختراق المنطقة المحظورة",
@@ -148,6 +148,9 @@ def main():
 
     state = {"hover": -1, "click": None}
 
+    # WINDOW_NORMAL: the Qt backend scales the image to the window and hands
+    # the mouse callback image-space coordinates, so hit-testing needs no
+    # transform even when the user resizes the window.
     def on_mouse(event, x, y, flags, _):
         state["hover"] = -1
         for i in range(len(SCENARIOS)):
@@ -160,7 +163,10 @@ def main():
     # ASCII only: OpenCV's Qt backend can't resolve non-ASCII window names
     # (setMouseCallback fails with a NULL window handler).
     win = "Salamatak - Safety Vision"
-    cv2.namedWindow(win)
+    # A compact, draggable control panel: normal window (the video window is
+    # the fullscreen one), GUI_NORMAL drops the Qt toolbar/status bar.
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
+    cv2.resizeWindow(win, W, H)
     cv2.setMouseCallback(win, on_mouse)
 
     proc = None

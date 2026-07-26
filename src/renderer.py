@@ -32,6 +32,8 @@ class FrameRenderer:
     def __init__(self, zone_monitor, display_config=None):
         self.zone_monitor = zone_monitor
         self.config = display_config or DisplayConfig()
+        self._window_created = False
+        self._fullscreen_applied = False
 
     def draw(self, frame, events):
         display = frame.copy()
@@ -90,10 +92,26 @@ class FrameRenderer:
 
     def render_to_window(self, frame, events):
         annotated = self.draw(frame, events)
-        h, w = annotated.shape[:2]
-        max_w = self.config.max_display_width
-        if w > max_w:
-            scale = max_w / w
-            annotated = cv2.resize(annotated, (max_w, int(h * scale)))
+        fullscreen = getattr(self.config, "fullscreen", False)
+        if not self._window_created:
+            if fullscreen:
+                cv2.namedWindow(self.config.window_name, cv2.WINDOW_NORMAL)
+            self._window_created = True
+        if not fullscreen:
+            # Windowed mode: cap the window at max_display_width ourselves.
+            # Fullscreen hands the GUI the full-resolution frame to scale.
+            h, w = annotated.shape[:2]
+            max_w = self.config.max_display_width
+            if w > max_w:
+                scale = max_w / w
+                annotated = cv2.resize(annotated, (max_w, int(h * scale)))
         cv2.imshow(self.config.window_name, annotated)
-        return cv2.waitKey(1) & 0xFF == ord('q')
+        quit_requested = cv2.waitKey(1) & 0xFF == ord('q')
+        if fullscreen and not self._fullscreen_applied:
+            # Applied after the first imshow/waitKey: the window must be
+            # mapped by the window manager before the fullscreen hint takes.
+            cv2.setWindowProperty(self.config.window_name,
+                                  cv2.WND_PROP_FULLSCREEN,
+                                  cv2.WINDOW_FULLSCREEN)
+            self._fullscreen_applied = True
+        return quit_requested
