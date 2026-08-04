@@ -17,11 +17,9 @@ PAGE_HEIGHT = 3508
 QR_SIZE = int(PAGE_WIDTH * 0.8)  # 80% of page width
 
 WORKERS = [
-    {"id": "0cb42", "label": "worker_a"},
-    {"id": "98c39", "label": "worker_b"},
-    {"id": "c52a4", "label": "Worker D"},
-    {"id": "2678a", "label": "worker_c"},
-    {"id": "7c2ea", "label": "Worker E"},
+    {"id": "0cb42", "label": "worker-1"},
+    {"id": "98c39", "label": "worker-2"},
+    {"id": "c52a4", "label": "worker-3"},
 ]
 
 OUTPUT_DIR = "data/qr_badges"

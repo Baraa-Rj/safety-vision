@@ -59,3 +59,11 @@ Thumbs.db
 .env
 venv/
 .venv/
+
+# Claude Code local tool config (machine-specific, may contain local paths/creds)
+.claude/
+
+# Unrelated personal/academic files — do not track at repo root
+*.docx
+*.pptx
+comp4200.tex
