@@ -10,6 +10,7 @@ os.environ.setdefault(
 
 import json
 import logging
+import sys
 from config.settings import PipelineConfig
 from src.camera import CameraStream
 from src.ppe_detector import PPEDetector
@@ -21,10 +22,15 @@ from src.renderer import FrameRenderer
 from src.event_logger import EventLogger
 from src.alert_client import AlertClient
 from src.pipeline import SafetyPipeline
+from src.preflight import missing_inputs_message
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 config = PipelineConfig()
+
+_missing = missing_inputs_message(config.camera.source, config.ppe.model_path)
+if _missing:
+    sys.exit(_missing)
 
 camera = CameraStream(
     config.camera.source,

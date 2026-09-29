@@ -71,7 +71,7 @@ everything else lives in `config/settings.py`.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `CAMERA_RTSP_URL` | Live RTSP stream — keeps credentials out of git | bundled sample video |
+| `CAMERA_RTSP_URL` | Live RTSP stream — keeps credentials out of git | `data/sample_videos/0712.mp4` (not in git) |
 | `BACKEND_URL` | Base URL; PPE & zone endpoints derive from it | `http://localhost:8080` |
 | `PPE_ALERTS_ENDPOINT` | Override the PPE alert URL | derived from `BACKEND_URL` |
 | `ZONES_ENDPOINT` | Override the zone upload URL | derived from `BACKEND_URL` |
@@ -88,7 +88,10 @@ From the repository root:
 python3 -m src.main
 ```
 
-Press `q` to stop. With no `CAMERA_RTSP_URL` set, it runs against the sample video.
+Press `q` to stop. With no `CAMERA_RTSP_URL` set, it reads `data/sample_videos/0712.mp4`.
+That video is not in the repository: copy a video there or set `CAMERA_RTSP_URL`. If the
+video source or `models/best.pt` is missing, the app exits with a message naming what is
+missing.
 
 ### Generate QR badges
 
