@@ -66,4 +66,5 @@ venv/
 # Unrelated personal/academic files — do not track at repo root
 *.docx
 *.pptx
+*.pdf
 comp4200.tex
