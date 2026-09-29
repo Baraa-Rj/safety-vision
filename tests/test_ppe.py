@@ -1,4 +1,5 @@
 import pytest
+from config.settings import _DEFAULT_CAMERA_SOURCE, PPEConfig
 from src.ppe_detector import PPEDetector
 
 
@@ -42,8 +43,8 @@ def test_detect_on_real_frame():
     import time
     from src.camera import CameraStream
 
-    cam = CameraStream("data/sample_videos/output.mp4")
-    detector = PPEDetector("models/best.pt")
+    cam = CameraStream(_DEFAULT_CAMERA_SOURCE)
+    detector = PPEDetector(PPEConfig().model_path)
     time.sleep(2)
 
     frame = cam.read()
