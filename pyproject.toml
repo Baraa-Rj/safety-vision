@@ -19,6 +19,9 @@ dev = ["pytest>=7.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Integration tests need a sample video and model weights that are not in git;
+# run them explicitly with `pytest -m integration`.
+addopts = "-m 'not integration'"
 markers = [
     "integration: tests requiring real YOLO models and video files",
 ]

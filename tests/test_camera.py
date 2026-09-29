@@ -1,4 +1,5 @@
 import pytest
+from config.settings import _DEFAULT_CAMERA_SOURCE
 from src.camera import CameraStream
 
 
@@ -10,7 +11,7 @@ def test_rejects_invalid_source():
 @pytest.mark.integration
 def test_reads_frame_from_video():
     import time
-    cam = CameraStream("data/sample_videos/output.mp4")
+    cam = CameraStream(_DEFAULT_CAMERA_SOURCE)
     time.sleep(2)
     frame = cam.read()
     cam.stop()

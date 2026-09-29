@@ -104,8 +104,12 @@ to helmets or vests.
 ## Tests
 
 ```bash
-pytest
+pytest                    # unit tests; integration tests are deselected by default
+pytest -m integration     # needs the sample video and models/best.pt (see below)
 ```
+
+The integration tests read the default sample video, `data/sample_videos/0712.mp4`, and
+the detector weights, `models/best.pt`. Neither is in git; copy them into place first.
 
 ## Repository layout
 
