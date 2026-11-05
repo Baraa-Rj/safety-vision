@@ -44,7 +44,9 @@ def _env_file():
                 env[k.strip()] = v.strip()
     env.update(os.environ)
     return env
-_CLIPS = "/home/dark/ppe_finetune_dataset/drive_folder/records from camira"
+# Scenario clips are not in git. They sit next to the default sample video in
+# data/sample_videos/; DEMO_CLIPS_DIR points elsewhere (e.g. a Drive export).
+_CLIPS = os.environ.get("DEMO_CLIPS_DIR") or os.path.join(_ROOT, "data", "sample_videos")
 
 # (title, arabic label, clip, accent color, zones on?) — the restricted-zone
 # polygon is only relevant to the zone-breach scenario; the other clips run
@@ -64,10 +66,23 @@ CARD = (30, 41, 55)
 CARD_HOVER = (45, 60, 80)
 FG = (240, 244, 248)
 ACCENT = (22, 163, 74)        # safety green
-_AR_BOLD = "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"
-_AR_REG = "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"
-_LAT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-_LAT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+
+def _font_path(name, *dirs):
+    """Fonts live in different places per distro (Debian/Ubuntu vs Arch)."""
+    for d in dirs:
+        path = os.path.join(d, name)
+        if os.path.exists(path):
+            return path
+    return os.path.join(dirs[0], name)
+
+
+_NOTO = ("/usr/share/fonts/truetype/noto", "/usr/share/fonts/noto")
+_DEJAVU = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/TTF")
+_AR_BOLD = _font_path("NotoSansArabic-Bold.ttf", *_NOTO)
+_AR_REG = _font_path("NotoSansArabic-Regular.ttf", *_NOTO)
+_LAT_BOLD = _font_path("DejaVuSans-Bold.ttf", *_DEJAVU)
+_LAT_REG = _font_path("DejaVuSans.ttf", *_DEJAVU)
 
 BTN_X, BTN_W, BTN_H, BTN_GAP = 40, W - 80, 96, 24
 BTN_Y0 = 236
@@ -75,7 +90,10 @@ LOGO_BLUE = (66, 133, 181)     # sampled from the logo artwork
 
 
 def _load_logo(width=300):
-    """The artwork is RGBA on a huge transparent canvas -> crop to content."""
+    """The artwork is RGBA on a huge transparent canvas -> crop to content.
+    None when the (untracked) artwork is absent: the header shows the name."""
+    if not os.path.exists(_LOGO_PATH):
+        return None
     im = Image.open(_LOGO_PATH).convert("RGBA")
     im = im.crop(im.getchannel("A").getbbox())
     h = int(im.height * width / im.width)
@@ -94,13 +112,18 @@ def render(hover=-1, running=-1):
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
 
-    # Header: the Salamtak logo artwork + the name in English.
-    img.paste(_LOGO, ((W - _LOGO.width) // 2, 24), _LOGO)
+    # Header: the Salamtak logo artwork + the name in English. Without the
+    # artwork, the name sits centred in the header space instead.
+    if _LOGO is not None:
+        img.paste(_LOGO, ((W - _LOGO.width) // 2, 24), _LOGO)
+        name_y = 24 + _LOGO.height + 26
+    else:
+        name_y = (BTN_Y0 - 32) // 2 - 14
     name_font = ImageFont.truetype(_LAT_BOLD, 30)
-    d.text((W // 2, 24 + _LOGO.height + 26), "Salamtak", font=name_font,
+    d.text((W // 2, name_y), "Salamtak", font=name_font,
            fill=LOGO_BLUE, anchor="mm")
     sub_font = ImageFont.truetype(_LAT_REG, 16)
-    d.text((W // 2, 24 + _LOGO.height + 56), "Safety Vision — Demo Scenarios",
+    d.text((W // 2, name_y + 30), "Safety Vision — Demo Scenarios",
            font=sub_font, fill=(148, 163, 184), anchor="mm")
     d.line([(BTN_X, BTN_Y0 - 32), (W - BTN_X, BTN_Y0 - 32)],
            fill=(51, 65, 85), width=1)
