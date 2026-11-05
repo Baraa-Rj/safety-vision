@@ -113,6 +113,11 @@ class FallDetectionConfig:
     # than the streak gap so a brief detector dropout doesn't reset the severity
     # clock — a motionless worker still escalates through flicker.
     recovery_seconds: float = 3.0
+    # best.pt emits no 'person' while a worker sits up / gets up after a fall
+    # (~6.5 s on the demo clip). For this long after a confirmed fall, their
+    # helmet-over-vest near the fall site stands in for the missing person box.
+    # See SafetyPipeline._infer_recovering_workers.
+    recovery_display_seconds: float = 30.0
     enabled: bool = True
 
 

@@ -22,6 +22,9 @@ class PPEDetector:
         # Latest 'fallen' detections, refreshed each detect(). The FallDetector
         # reads these so best.pt runs only once per frame.
         self.fallen_detections = []
+        # Latest detected PPE items no person box claimed, refreshed each
+        # detect(). See SafetyPipeline._infer_recovering_workers.
+        self.unclaimed_ppe = []
 
         # Vest/helmet sightings BELOW the class threshold still carry signal:
         # a vest glimpsed at 0.30 while a worker enters the frame is evidence
@@ -108,6 +111,7 @@ class PPEDetector:
         # region where that PPE is worn (helmet on the head, vest on the torso),
         # which rejects held/floor items and cross-body bleed.
         detected_by_person = {id(p): {} for p in persons}
+        unclaimed = []
         for ppe in ppe_items:
             best_person = None
             best_ratio = self.overlap_threshold
@@ -121,6 +125,11 @@ class PPEDetector:
                 confs = detected_by_person[id(best_person)]
                 cls = ppe["class_name"]
                 confs[cls] = max(confs.get(cls, 0.0), ppe["confidence"])
+            elif ppe["confidence"] >= self._class_threshold(ppe["class_name"]):
+                # best.pt has no 'person' for some poses (sitting up after a
+                # fall) yet still sees that worker's helmet and vest.
+                unclaimed.append(ppe)
+        self.unclaimed_ppe = unclaimed
 
         results_list = []
         for person in persons:

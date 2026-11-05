@@ -28,6 +28,31 @@ def _iou(box_a, box_b):
     return inter / union
 
 
+def _center(box):
+    return (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+
+
+def _helmet_above(vest_box, helmets):
+    """The helmet worn over this vest: centred over it (within half a vest
+    width either side), above its centre, not floating more than a vest height
+    above it, and not bigger than the vest. Closest to the vest's top wins."""
+    vx1, vy1, vx2, vy2 = vest_box
+    vw, vh = vx2 - vx1, vy2 - vy1
+    vcx, vcy = _center(vest_box)
+    best, best_dist = None, None
+    for helmet in helmets:
+        hx1, hy1, hx2, hy2 = helmet["bbox"]
+        hcx, hcy = _center(helmet["bbox"])
+        if not vx1 - 0.5 * vw <= hcx <= vx2 + 0.5 * vw:
+            continue
+        if hcy >= vcy or hy2 < vy1 - vh or hx2 - hx1 > 1.5 * vw:
+            continue
+        dist = ((hcx - vcx) ** 2 + (hy2 - vy1) ** 2) ** 0.5
+        if best is None or dist < best_dist:
+            best, best_dist = helmet, dist
+    return best
+
+
 class SafetyPipeline:
     def __init__(self, config, camera, ppe_detector, fall_detector,
                  worker_identifier, zone_monitor, renderer, event_logger,
@@ -75,6 +100,9 @@ class SafetyPipeline:
         # identity is recovered spatially once and pinned here for the whole
         # fall event. See _recover_fallen_identity.
         self._fall_identities = {}
+        # Where and when each confirmed fall was last seen — the only places a
+        # worker may be inferred from PPE alone. See _infer_recovering_workers.
+        self._recent_falls = {}
 
         wf_required = (
             wet_floor_detector.config.consecutive_frames_required
@@ -95,6 +123,7 @@ class SafetyPipeline:
             "falls": [],
             "zone_breaches": [],
             "wet_floor_events": [],
+            "recovering_workers": [],
             "timestamp": 0,
         }
 
@@ -284,6 +313,7 @@ class SafetyPipeline:
             "falls": [],
             "zone_breaches": [],
             "wet_floor_events": [],
+            "recovering_workers": [],
             "timestamp": time.time(),
         }
 
@@ -317,6 +347,13 @@ class SafetyPipeline:
                     "still_seconds": fr.get("still_seconds"),
                     "alert": fr.get("alert", False),
                 })
+                site_key = fr.get("track_id")
+                if site_key is None:
+                    site_key = tuple(fr["bbox"])
+                self._recent_falls[site_key] = {
+                    "bbox": fr["bbox"], "ts": events["timestamp"]}
+        events["recovering_workers"] = self._infer_recovering_workers(
+            events["timestamp"])
 
         # Identity pass first, for ALL persons: an unidentified box that sits
         # on top of an identified one (tracker double-box / phantom on the
@@ -501,6 +538,64 @@ class SafetyPipeline:
 
         return events
 
+    def _infer_recovering_workers(self, now):
+        """Presence boxes for a worker getting up after a fall.
+
+        best.pt has no 'person' output for sitting / kneeling / getting-up
+        poses: on the fall demo clip it emits zero person boxes (even at conf
+        0.05) for ~6.5 s after the worker stops lying flat, while still finding
+        their helmet and vest at ~0.9 — so the worker vanished from the screen.
+        For fall.recovery_display_seconds after a confirmed fall, a helmet
+        directly above a vest near the fall site, with no person box claiming
+        them, marks where that worker is. Gating on a recent fall keeps PPE
+        left on a rack from becoming a phantom worker.
+
+        Presence only, never a PPE verdict: on the demo clip the helmet had
+        come off in the fall and sat on the worker's shoulder while the vest
+        was worn — "helmet above vest" proves the gear is there, not that it
+        is worn. So these boxes skip compliance, alerts and track continuity;
+        PPE checks resume once the detector sees a person again. A stop-gap:
+        the real fix is retraining with these poses labelled 'person'."""
+        window = self.config.fall.recovery_display_seconds
+        self._recent_falls = {
+            k: site for k, site in self._recent_falls.items()
+            if now - site["ts"] <= window
+        }
+        if not self._recent_falls:
+            return []
+
+        def _near_site(box):
+            cx, cy = _center(box)
+            for site in self._recent_falls.values():
+                sx1, sy1, sx2, sy2 = site["bbox"]
+                scx, scy = _center(site["bbox"])
+                reach = max(sx2 - sx1, sy2 - sy1)
+                if ((cx - scx) ** 2 + (cy - scy) ** 2) ** 0.5 <= reach:
+                    return True
+            return False
+
+        def _on_the_ground(box):
+            # Still covered by a current fall box: that box already shows them.
+            cx, cy = _center(box)
+            return any(
+                f["bbox"][0] <= cx <= f["bbox"][2] and f["bbox"][1] <= cy <= f["bbox"][3]
+                for f in getattr(self.ppe_detector, "fallen_detections", []))
+
+        unclaimed = getattr(self.ppe_detector, "unclaimed_ppe", [])
+        helmets = [p for p in unclaimed if p["class_name"] == "helmet"]
+        recovering = []
+        for vest in (p for p in unclaimed if p["class_name"] == "vest"):
+            helmet = _helmet_above(vest["bbox"], helmets)
+            if helmet is None:
+                continue
+            hb, vb = helmet["bbox"], vest["bbox"]
+            box = [min(hb[0], vb[0]), hb[1], max(hb[2], vb[2]), vb[3]]
+            if _on_the_ground(box) or not _near_site(box):
+                continue
+            helmets.remove(helmet)
+            recovering.append({"bbox": box, "track_id": vest.get("track_id")})
+        return recovering
+
     def _append_held_boxes(self, events, ppe_results):
         """Ghost boxes: keep a worker's rectangle on screen through short
         detection dropouts. YOLO only emits boxes for detections matched THIS
@@ -647,7 +742,8 @@ class SafetyPipeline:
                 events["ppe_violations"] or
                 events["compliant_workers"] or
                 events["pending_workers"] or
-                events["falls"]
+                events["falls"] or
+                events["recovering_workers"]
             )
             with self._events_lock:
                 if has_detections:

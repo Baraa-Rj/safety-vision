@@ -770,3 +770,102 @@ def test_ctrl_c_still_runs_clean_shutdown(pipeline, monkeypatch):
     assert pipeline.running is False
     assert pipeline._detection_thread is None
     assert camera_stops == [True]
+
+
+class LoosePPE:
+    """No person box at all — the model can't see the pose — but the
+    worker's helmet and vest are still detected (and left unclaimed)."""
+
+    def __init__(self, helmet=(60, 100, 100, 130), vest=(50, 125, 120, 200),
+                 fallen=None):
+        self.unclaimed_ppe = [
+            {"class_name": "helmet", "bbox": list(helmet), "confidence": 0.9,
+             "track_id": 31},
+            {"class_name": "vest", "bbox": list(vest), "confidence": 0.9,
+             "track_id": 32},
+        ]
+        self.fallen_detections = fallen or []
+
+    def detect(self, frame):
+        return []
+
+
+_FALL_SITE = [20, 150, 200, 230]
+
+
+def _after_fall(dummy_frame, detector, config=None):
+    """One frame with a confirmed fall, then the fall box disappears."""
+    pipeline = _pipeline_with(StubPPEDetector(), config or PipelineConfig())
+    pipeline.fall_detector = StubFallPassthrough(21, _FALL_SITE)
+    pipeline.process_frame(dummy_frame)
+    pipeline.fall_detector = StubFallDetector()
+    pipeline.ppe_detector = detector
+    return pipeline
+
+
+def test_worker_getting_up_after_fall_stays_on_screen(dummy_frame):
+    # best.pt emits no 'person' while a worker sits up after a fall; their
+    # helmet over their vest near the fall site marks where they are.
+    pipeline = _after_fall(dummy_frame, LoosePPE())
+    events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == [
+        {"bbox": [50, 100, 120, 200], "track_id": 32}]
+
+
+def test_recovering_worker_gets_no_ppe_verdict(dummy_frame):
+    # Helmet-above-vest proves the gear is there, not that it's worn (on the
+    # demo clip the helmet had come off in the fall), so no OK/violation and
+    # nothing for the backend.
+    pipeline = _after_fall(dummy_frame, LoosePPE())
+    for _ in range(10):
+        events = pipeline.process_frame(dummy_frame)
+        assert events["compliant_workers"] == []
+        assert events["ppe_violations"] == []
+        assert events["pending_workers"] == []
+        assert events["confirmed_ppe_violations"] == []
+    assert len(events["recovering_workers"]) == 1
+
+
+def test_loose_ppe_without_a_recent_fall_is_not_a_worker(dummy_frame):
+    # A helmet and vest on a rack must never become a phantom worker.
+    pipeline = _pipeline_with(LoosePPE(), PipelineConfig())
+    for _ in range(5):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == []
+    assert events["ppe_violations"] == []
+
+
+def test_no_inferred_worker_while_still_on_the_ground(dummy_frame):
+    # The fall box itself covers a worker who is still down.
+    fallen = [{"bbox": [20, 90, 200, 230], "track_id": 21, "confidence": 0.9}]
+    pipeline = _after_fall(dummy_frame, LoosePPE(fallen=fallen))
+    for _ in range(5):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == []
+
+
+def test_ppe_far_from_the_fall_site_is_not_inferred(dummy_frame):
+    pipeline = _after_fall(dummy_frame, LoosePPE(helmet=(560, 300, 600, 330),
+                                                 vest=(550, 325, 620, 400)))
+    for _ in range(5):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == []
+
+
+def test_helmet_beside_the_vest_is_not_a_worker(dummy_frame):
+    # Head-over-torso geometry is required: a helmet set down next to a vest
+    # is not someone wearing them.
+    pipeline = _after_fall(dummy_frame, LoosePPE(helmet=(150, 190, 190, 220)))
+    for _ in range(5):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == []
+
+
+def test_inferred_worker_stops_after_the_recovery_window(dummy_frame):
+    pipeline = _after_fall(dummy_frame, LoosePPE())
+    window = pipeline.config.fall.recovery_display_seconds
+    for site in pipeline._recent_falls.values():
+        site["ts"] -= window + 1
+    for _ in range(5):
+        events = pipeline.process_frame(dummy_frame)
+    assert events["recovering_workers"] == []
