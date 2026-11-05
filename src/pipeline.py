@@ -669,28 +669,34 @@ class SafetyPipeline:
         self._detection_thread = threading.Thread(target=self._detection_loop, daemon=True)
         self._detection_thread.start()
 
-        while self.running:
-            loop_start = time.perf_counter()
+        try:
+            while self.running:
+                loop_start = time.perf_counter()
 
-            frame = self.camera.read()
-            if frame is None:
-                time.sleep(0.001)
-                continue
+                frame = self.camera.read()
+                if frame is None:
+                    time.sleep(0.001)
+                    continue
 
-            with self._events_lock:
-                events = self._latest_events
+                with self._events_lock:
+                    events = self._latest_events
 
-            if display:
-                quit_requested = self.renderer.render_to_window(frame, events)
-                if quit_requested:
-                    break
+                if display:
+                    quit_requested = self.renderer.render_to_window(frame, events)
+                    if quit_requested:
+                        break
 
-            elapsed = time.perf_counter() - loop_start
-            remaining = frame_period - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-
-        self.stop()
+                elapsed = time.perf_counter() - loop_start
+                remaining = frame_period - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+        except KeyboardInterrupt:
+            # Ctrl+C takes the same shutdown path as 'q'. Letting it propagate
+            # skips stop(), and the interpreter exits with the detection thread
+            # still running — the C++ runtime aborts and dumps core.
+            pass
+        finally:
+            self.stop()
 
     def stop(self):
         self.running = False

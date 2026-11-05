@@ -745,3 +745,28 @@ def test_separate_workers_do_not_adopt_identity(dummy_frame):
     by_track = {w["track_id"]: w for w in everyone}
     assert by_track[7]["worker_id"] == "W042"
     assert by_track[8]["worker_id"] is None
+
+
+def test_ctrl_c_still_runs_clean_shutdown(pipeline, monkeypatch):
+    # Ctrl+C mid-loop must still go through stop(): skipping it leaves the
+    # detection thread running at interpreter exit, which aborts the C++
+    # runtime ("terminate called without an active exception") and dumps core.
+    pipeline.config.camera.startup_delay = 0
+    pipeline.camera.stream = type("Stream", (), {"get": lambda self, prop: 25})()
+    camera_stops = []
+    monkeypatch.setattr(pipeline.camera, "stop", lambda: camera_stops.append(True))
+    monkeypatch.setattr("src.pipeline.cv2.destroyAllWindows", lambda: None)
+
+    def ctrl_c(frame, events):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pipeline.renderer, "render_to_window", ctrl_c)
+
+    try:
+        pipeline.run(display=True)
+    except KeyboardInterrupt:
+        pytest.fail("Ctrl+C escaped run() without a clean shutdown")
+
+    assert pipeline.running is False
+    assert pipeline._detection_thread is None
+    assert camera_stops == [True]
