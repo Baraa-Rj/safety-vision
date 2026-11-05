@@ -44,8 +44,11 @@ class PPEDetector:
     def detect(self, frame):
         detections = self.model.track(
             frame, conf=self._inference_conf, verbose=False,
-            imgsz=self.imgsz, persist=True, half=self.use_half,
+            imgsz=self.imgsz, persist=True,
             tracker=self.tracker_config,
+            # Recent Ultralytics warns on EVERY call that passes `half` at all
+            # (even False), flooding the terminal; it only matters on GPU.
+            **({"half": True} if self.use_half else {}),
         )[0]
 
         persons = []

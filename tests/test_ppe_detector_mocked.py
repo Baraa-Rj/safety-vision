@@ -72,6 +72,8 @@ def test_detect_passes_tracking_options(make_detector):
     assert kwargs["tracker"] == "custom.yaml"
     assert kwargs["persist"] is True
     assert kwargs["conf"] == detector._inference_conf
+    # On CPU `half` must not be passed at all: Ultralytics warns every frame.
+    assert "half" not in kwargs
 
 
 def test_worker_with_helmet_and_vest_is_compliant(make_detector):
