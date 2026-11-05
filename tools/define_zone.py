@@ -76,20 +76,26 @@ def main():
             points.append([x, y])
 
     win = f"Define zone '{args.zone_id}'  |  click corners, s=save, u=undo, c=clear, q=quit"
-    cv2.namedWindow(win)
+    # WINDOW_NORMAL: a 2880x1620 camera frame is larger than a laptop screen.
+    # The Qt backend scales the image to the window and still reports clicks
+    # in image coordinates, so the saved points stay in native camera coords.
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, min(w, 1280), int(min(w, 1280) * h / w))
     cv2.setMouseCallback(win, on_mouse)
+    # Markers scale with the frame so they stay visible once it's shrunk.
+    s = max(1, w // 960)
 
     while True:
         disp = frame.copy()
         for i, p in enumerate(points):
-            cv2.circle(disp, tuple(p), 5, (0, 165, 255), -1)
-            cv2.putText(disp, str(i + 1), (p[0] + 6, p[1] - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+            cv2.circle(disp, tuple(p), 5 * s, (0, 165, 255), -1)
+            cv2.putText(disp, str(i + 1), (p[0] + 6 * s, p[1] - 6 * s),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5 * s, (0, 165, 255), s)
         if len(points) >= 2:
             for i in range(len(points) - 1):
-                cv2.line(disp, tuple(points[i]), tuple(points[i + 1]), (0, 165, 255), 2)
+                cv2.line(disp, tuple(points[i]), tuple(points[i + 1]), (0, 165, 255), 2 * s)
         if len(points) >= 3:
-            cv2.line(disp, tuple(points[-1]), tuple(points[0]), (0, 165, 255), 1)
+            cv2.line(disp, tuple(points[-1]), tuple(points[0]), (0, 165, 255), s)
         cv2.imshow(win, disp)
 
         key = cv2.waitKey(20) & 0xFF

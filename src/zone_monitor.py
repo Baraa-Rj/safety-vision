@@ -100,8 +100,21 @@ class ZoneMonitor:
         """
         points = self._reference_points(person_bbox)
 
+        # A box running off the bottom of the frame means the feet are below
+        # it: the person stands nearer the camera than any visible floor, so
+        # only a zone reaching the bottom edge can hold them. Without this, a
+        # passer-by right in front of the camera has their knees overlap a far
+        # floor zone in the image and reads as inside it (seen on the zone demo).
+        feet_below_frame = False
+        if self._frame_size is not None:
+            frame_h = self._frame_size[1]
+            edge = frame_h - max(2, int(0.01 * frame_h))
+            feet_below_frame = person_bbox[3] >= edge
+
         for zone_id, polygon in self.zones.items():
             radius = self.radii.get(zone_id, 0.0)
+            if feet_below_frame and polygon[:, 1].max() + radius < edge:
+                continue
             # Signed distance: >0 inside, 0 on edge, <0 outside (px to nearest
             # edge). Take the band point closest to (or deepest inside) the zone.
             best = max(

@@ -64,7 +64,7 @@ class PPEConfig:
         "vest": 0.35,
         "helmet": 0.35,
         "person": 0.35,
-        "fallen": 0.40,
+        "fallen": 0.60,   # see FallDetectionConfig.fallen_conf
     })
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
@@ -87,7 +87,13 @@ class FallDetectionConfig:
     # Detection-based: best.pt has a dedicated 'fallen' class, so a worker on the
     # ground is detected directly (see PPEConfig.model_path). This is just the
     # temporal gate over those detections — no separate model or crop step.
-    fallen_conf: float = 0.40               # min detection confidence for a fallen box
+    # Measured on the fall demo clip: the real fall scored 0.76-0.95, while a
+    # huge near-square false 'fallen' box over empty wall (worker sitting up)
+    # scored 0.41-0.54 and showed as a new LOW fall at a 0.40 threshold. On the
+    # held-out set, 'fallen' recall at 0.60 is ~0.92 per frame (vs ~0.96 at
+    # 0.40) — and a fall only needs consecutive_frames of it. Keep in sync with
+    # PPEConfig.class_confidences["fallen"].
+    fallen_conf: float = 0.60               # min detection confidence for a fallen box
     consecutive_frames: int = 5             # sustained fallen frames before flagging
     min_size: int = 40                      # skip fallen boxes smaller than this (px)
     # A fallen person lies horizontal: real fallen boxes are wider than tall
@@ -107,6 +113,11 @@ class FallDetectionConfig:
     # than the streak gap so a brief detector dropout doesn't reset the severity
     # clock — a motionless worker still escalates through flicker.
     recovery_seconds: float = 3.0
+    # best.pt emits no 'person' while a worker sits up / gets up after a fall
+    # (~6.5 s on the demo clip). For this long after a confirmed fall, their
+    # helmet-over-vest near the fall site stands in for the missing person box.
+    # See SafetyPipeline._infer_recovering_workers.
+    recovery_display_seconds: float = 30.0
     enabled: bool = True
 
 
@@ -152,7 +163,13 @@ class WetFloorConfig:
     enabled: bool = True                        # wet_floor.pt trained (YOLO26-seg, single class)
     model_path: str = "models/wet_floor.pt"
     confidence_threshold: float = 0.5
-    min_area_pct: float = 0.25                  # ignore boxes <0.25% of frame (real papers run 0.4-1.4%)
+    # Ignore boxes smaller than this % of the frame. Was 0.25 (close-up papers
+    # run 0.4-1.4%), but the far spill by the door in the zone demo clip
+    # measures 0.185-0.27%, so 0.25 dropped 35 of its 143 detections and the
+    # box blinked out for up to ~10 s. On the three clips without a spill the
+    # model emits no boxes at all (any size, conf >= 0.5), so 0.15 costs nothing
+    # measurable there.
+    min_area_pct: float = 0.15
     consecutive_frames_required: int = 5        # temporal smoothing
     # Run the seg model only every Nth processed frame. A spill is a static
     # hazard, and this model runs in the same loop as PPE detection — skipping

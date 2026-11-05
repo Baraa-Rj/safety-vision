@@ -49,6 +49,15 @@ class FrameRenderer:
             cv2.putText(display, f"W:{wid} OK", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+        # A worker getting up after a fall, located from their helmet + vest
+        # because the detector has no 'person' for that pose. Presence only:
+        # whether the gear is actually worn isn't known, so no OK/VIOLATION.
+        for worker in events.get("recovering_workers", []):
+            x1, y1, x2, y2 = worker["bbox"]
+            cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(display, "RECOVERING (PPE not checked)", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
         # events["pending_workers"] (Checking state) is intentionally NOT
         # drawn: it's internal evidence accumulation. Rendering it made every
         # track churn / entry flash a yellow box; a worker with no verdict yet

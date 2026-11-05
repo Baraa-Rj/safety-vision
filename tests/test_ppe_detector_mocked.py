@@ -72,6 +72,8 @@ def test_detect_passes_tracking_options(make_detector):
     assert kwargs["tracker"] == "custom.yaml"
     assert kwargs["persist"] is True
     assert kwargs["conf"] == detector._inference_conf
+    # On CPU `half` must not be passed at all: Ultralytics warns every frame.
+    assert "half" not in kwargs
 
 
 def test_worker_with_helmet_and_vest_is_compliant(make_detector):
@@ -178,3 +180,28 @@ def test_region_and_overlap_edge_cases(make_detector):
     assert detector._in_expected_region("helmet", HELMET, [0, 50, 10, 50]) is False  # zero height
     assert detector._in_expected_region("other", BOOTS_LEVEL, PERSON) is True
     assert detector._overlap_ratio([5, 5, 5, 5], [0, 0, 10, 10]) == 0.0  # zero-area inner box
+
+
+def test_ppe_without_a_person_is_exposed_as_unclaimed(make_detector):
+    # A worker the model can't see as a 'person' (sitting up after a fall)
+    # still shows up as their helmet and vest; the pipeline needs those.
+    detector = make_detector()
+    detector.model.boxes = [
+        box("helmet", HELMET, 0.9, track_id=5),
+        box("vest", VEST, 0.9, track_id=6),
+        box("vest", BOOTS_LEVEL, 0.3),   # uncertain band: not a detection
+    ]
+    assert detector.detect(FRAME) == []
+    assert [(p["class_name"], p["track_id"]) for p in detector.unclaimed_ppe] == [
+        ("helmet", 5), ("vest", 6)]
+
+
+def test_ppe_credited_to_a_person_is_not_unclaimed(make_detector):
+    detector = make_detector()
+    detector.model.boxes = [
+        box("person", PERSON, 0.9, track_id=1),
+        box("helmet", HELMET, 0.9),
+        box("vest", VEST, 0.9),
+    ]
+    detector.detect(FRAME)
+    assert detector.unclaimed_ppe == []

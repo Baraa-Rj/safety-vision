@@ -250,3 +250,33 @@ def test_zone_radius_scales_with_frame():
     assert zm.check_person([415, 250, 455, 400]) == "z"
     # 30px outside: beyond the keep-out.
     assert zm.check_person([430, 250, 470, 400]) is None
+
+
+# --- person cut off by the bottom of the frame (measured on the zone demo) ---
+
+_FLOOR_ZONE = [[2131, 1335], [2244, 1546], [2627, 1421], [2462, 1291]]
+
+
+def _demo_monitor(points=_FLOOR_ZONE):
+    zm = ZoneMonitor()
+    zm.add_zone("restricted_1", points, frame_size=(2880, 1620))
+    zm.set_frame_size(2880, 1620)
+    return zm
+
+
+def test_person_cut_off_at_frame_bottom_is_not_in_a_far_floor_zone():
+    # A passer-by close to the camera: feet below the frame, knees overlapping
+    # the far floor zone in the image. They stand nearer than anything
+    # visible, so a zone that doesn't reach the bottom edge can't hold them.
+    assert _demo_monitor().check_person([1864, 1066, 2331, 1619]) is None
+
+
+def test_person_with_visible_feet_still_breaches_the_floor_zone():
+    # The worker who actually walked in: feet visible, on the zone.
+    assert _demo_monitor().check_person([2004, 860, 2205, 1421]) == "restricted_1"
+
+
+def test_person_cut_off_at_frame_bottom_counts_in_a_zone_reaching_the_bottom():
+    # Truncated feet must still work where they can physically be.
+    zone = [[1800, 1300], [2600, 1300], [2600, 1620], [1800, 1620]]
+    assert _demo_monitor(zone).check_person([1864, 1066, 2331, 1619]) == "restricted_1"

@@ -47,7 +47,9 @@ class WetFloorDetector:
             conf=self.config.confidence_threshold,
             verbose=False,
             imgsz=640,
-            half=self.use_half,
+            # Passing `half` at all (even False) warns every call on recent
+            # Ultralytics; it only matters on GPU.
+            **({"half": True} if self.use_half else {}),
         )[0]
 
         h, w = frame.shape[:2]

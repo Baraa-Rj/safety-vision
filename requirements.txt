@@ -1,4 +1,5 @@
 ultralytics>=8.0
+lap>=0.5.12
 opencv-python>=4.8
 numpy>=1.24
 requests>=2.28
