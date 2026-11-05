@@ -163,7 +163,13 @@ class WetFloorConfig:
     enabled: bool = True                        # wet_floor.pt trained (YOLO26-seg, single class)
     model_path: str = "models/wet_floor.pt"
     confidence_threshold: float = 0.5
-    min_area_pct: float = 0.25                  # ignore boxes <0.25% of frame (real papers run 0.4-1.4%)
+    # Ignore boxes smaller than this % of the frame. Was 0.25 (close-up papers
+    # run 0.4-1.4%), but the far spill by the door in the zone demo clip
+    # measures 0.185-0.27%, so 0.25 dropped 35 of its 143 detections and the
+    # box blinked out for up to ~10 s. On the three clips without a spill the
+    # model emits no boxes at all (any size, conf >= 0.5), so 0.15 costs nothing
+    # measurable there.
+    min_area_pct: float = 0.15
     consecutive_frames_required: int = 5        # temporal smoothing
     # Run the seg model only every Nth processed frame. A spill is a static
     # hazard, and this model runs in the same loop as PPE detection — skipping
