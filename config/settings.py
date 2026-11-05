@@ -64,7 +64,7 @@ class PPEConfig:
         "vest": 0.35,
         "helmet": 0.35,
         "person": 0.35,
-        "fallen": 0.40,
+        "fallen": 0.60,   # see FallDetectionConfig.fallen_conf
     })
     required_ppe: set = field(default_factory=lambda: {"helmet", "vest"})
     overlap_threshold: float = 0.5
@@ -87,7 +87,13 @@ class FallDetectionConfig:
     # Detection-based: best.pt has a dedicated 'fallen' class, so a worker on the
     # ground is detected directly (see PPEConfig.model_path). This is just the
     # temporal gate over those detections — no separate model or crop step.
-    fallen_conf: float = 0.40               # min detection confidence for a fallen box
+    # Measured on the fall demo clip: the real fall scored 0.76-0.95, while a
+    # huge near-square false 'fallen' box over empty wall (worker sitting up)
+    # scored 0.41-0.54 and showed as a new LOW fall at a 0.40 threshold. On the
+    # held-out set, 'fallen' recall at 0.60 is ~0.92 per frame (vs ~0.96 at
+    # 0.40) — and a fall only needs consecutive_frames of it. Keep in sync with
+    # PPEConfig.class_confidences["fallen"].
+    fallen_conf: float = 0.60               # min detection confidence for a fallen box
     consecutive_frames: int = 5             # sustained fallen frames before flagging
     min_size: int = 40                      # skip fallen boxes smaller than this (px)
     # A fallen person lies horizontal: real fallen boxes are wider than tall

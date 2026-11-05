@@ -147,3 +147,23 @@ def test_recovery_starts_a_fresh_low_event(clock):
     falls = d.detect([_det()])
     assert falls[0]["severity"] == "LOW"
     assert falls[0]["alert"] is True    # new event re-alerts
+
+
+# --- default thresholds, pinned to boxes measured on the fall demo clip ---
+
+def test_default_threshold_rejects_low_confidence_square_box(clock):
+    # After the worker sat up, best.pt emitted a huge near-square 'fallen' box
+    # over empty wall at conf 0.41-0.54 for ~3 s; at a 0.40 threshold it was
+    # shown as a new LOW fall.
+    d = _make(alert_delay_seconds=0)
+    for _ in range(10):
+        assert _feed(d, clock, bbox=(451, 457, 1522, 1372), conf=0.54) == []
+
+
+def test_default_threshold_keeps_real_fall(clock):
+    # The real fall on the same clip never scored below 0.76.
+    d = _make(alert_delay_seconds=0)
+    for _ in range(d.consecutive - 1):
+        assert _feed(d, clock, bbox=(1052, 1330, 1722, 1514), conf=0.76) == []
+    falls = _feed(d, clock, bbox=(1052, 1330, 1722, 1514), conf=0.76)
+    assert [f["severity"] for f in falls] == ["LOW"]
